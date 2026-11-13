@@ -363,10 +363,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             return Ok(true);
         }
 
-        for (child_nibble, child_slot) in &branch.children {
-            let Some(inner_child) = child_slot else {
-                continue;
-            };
+        for (child_nibble, inner_child) in branch.children.iter_present() {
             if ensure_stack(|| self.child_in_range(inner_child, &pfx, child_nibble, range))? {
                 return Ok(true);
             }
@@ -407,7 +404,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         let Some(branch) = node.as_branch() else {
             return Ok(BoundaryChildSource::Recompute);
         };
-        match branch.children[on_path].as_ref() {
+        match branch.children.get(on_path) {
             // No on-path child in the proposal, so there is no in-range key
             // under it to report. Either answer computes the same root here —
             // the hash step skips an absent child before consulting the mask,
@@ -449,19 +446,28 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
         };
 
-        for (nibble, slot) in &mut branch.children {
+        let mut has_off_path_child = false;
+        for (nibble, child) in branch.children.iter_present() {
             if nibble == on_path {
                 continue;
             }
+            has_off_path_child = true;
 
             if let Some(range) = range
-                && let Some(child) = slot.as_ref()
                 && ensure_stack(|| self.child_in_range(child, acc_prefix, nibble, range))?
             {
                 return Err(api::Error::ProofError(ProofError::EndRootMismatch));
             }
+        }
 
-            *slot = None;
+        // Keep only the on-path child, rebuilding the collection once instead
+        // of shrinking it one child at a time.
+        if has_off_path_child {
+            let on_path_child = branch.children.remove(on_path);
+            branch.children = on_path_child
+                .map(|child| (on_path, child))
+                .into_iter()
+                .collect();
         }
 
         // Clear the value only when this node's key is out of the proven range.
@@ -549,7 +555,7 @@ mod tests {
         root.as_branch_mut()
             .unwrap()
             .children
-            .take(PathComponent::try_new(nibble).unwrap())
+            .remove(PathComponent::try_new(nibble).unwrap())
             .unwrap()
     }
 
@@ -753,8 +759,8 @@ mod tests {
         let branch = root_node.as_branch().unwrap();
 
         // Root children unchanged
-        assert!(branch.children[pc(1)].is_some());
-        assert!(branch.children[pc(2)].is_some());
+        assert!(branch.children.get(pc(1)).is_some());
+        assert!(branch.children.get(pc(2)).is_some());
 
         // Put the root back into the merkle and check for the stripped node.
         *merkle.nodestore.root_mut() = Some(root_node);

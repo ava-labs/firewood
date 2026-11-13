@@ -47,6 +47,7 @@ use firewood_storage::Node;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeReader;
 use firewood_storage::NodeStore;
+use firewood_storage::PackedChildren;
 use firewood_storage::Path;
 use firewood_storage::PathBuf;
 use firewood_storage::PathComponent;
@@ -135,7 +136,7 @@ fn get_helper<T: TrieReader>(
             // 3. The key is below the node (i.e. its descendant)
             match node {
                 Node::Leaf(_) => Ok(None),
-                Node::Branch(node) => match node.children[child_index].as_ref() {
+                Node::Branch(node) => match node.children.get(child_index) {
                     None => Ok(None),
                     Some(Child::Node(child)) => {
                         ensure_stack(|| get_helper(nodestore, child, remaining_key))
@@ -789,8 +790,7 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
     // For children inside the proven range, compute hashes recursively.
     // For children outside the range, use proof node hashes (set below).
     let mut child_prefix: PathBuf = full_key.iter().copied().collect();
-    for (nibble, child_opt) in &branch.children {
-        let Some(child) = child_opt else { continue };
+    for (nibble, child) in branch.children.iter_present() {
         if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
             continue;
         }
@@ -1858,11 +1858,8 @@ impl<T: TrieReader> Merkle<T> {
                 );
                 writeln!(writer, "\"]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                for (childidx, child) in &b.children {
-                    let (child, child_hash) = match child {
-                        None => continue,
-                        Some(node) => (node.as_maybe_persisted_node(), node.hash()),
-                    };
+                for (childidx, child) in b.children.iter_present() {
+                    let (child, child_hash) = (child.as_maybe_persisted_node(), child.hash());
 
                     let inserted = seen.insert(format!("{child}"));
                     keep_alive.push(child.clone());
@@ -2155,7 +2152,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
-                    children: Children::new(),
+                    children: PackedChildren::new(),
                 };
 
                 // Shorten the node's partial path since it has a new parent.
@@ -2199,7 +2196,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         let mut branch = BranchNode {
                             partial_path: leaf.partial_path,
                             value: Some(leaf.value),
-                            children: Children::new(),
+                            children: PackedChildren::new(),
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
@@ -2224,20 +2221,23 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 //     |                           |    \
                 //                               node   key
                 // Make a branch node that has both the current node and a new leaf node as children.
-                let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
-                    value: None,
-                    children: Children::new(),
-                };
-
+                let shared_path: Path = path_overlap.shared.into();
                 node.update_partial_path(node_partial_path);
-                branch.children.insert(node_index, Child::Node(node));
-
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: key_partial_path,
                 });
-                branch.children.insert(key_index, Child::Node(new_leaf));
+
+                let branch = BranchNode {
+                    partial_path: shared_path,
+                    value: None,
+                    children: [
+                        (node_index, Child::Node(node)),
+                        (key_index, Child::Node(new_leaf)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                };
 
                 firewood_counter!(INSERT, "operation" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))
@@ -2267,7 +2267,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                     let branch = BranchNode {
                         partial_path: leaf.partial_path,
                         value: Some(leaf.value),
-                        children: Children::new(),
+                        children: PackedChildren::new(),
                     };
                     Ok(Node::Branch(Box::new(branch)))
                 }
@@ -2278,7 +2278,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
-                    children: Children::new(),
+                    children: PackedChildren::new(),
                 };
 
                 node.update_partial_path(partial_path);
@@ -2296,7 +2296,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                                 let new_branch = Node::Branch(Box::new(BranchNode {
                                     partial_path,
                                     value: None,
-                                    children: Children::new(),
+                                    children: PackedChildren::new(),
                                 }));
                                 return Ok(Some(Child::Node(new_branch)));
                             };
@@ -2313,13 +2313,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         let mut branch = BranchNode {
                             partial_path: leaf.partial_path,
                             value: Some(leaf.value),
-                            children: Children::new(),
+                            children: PackedChildren::new(),
                         };
 
                         let new_branch = Node::Branch(Box::new(BranchNode {
                             partial_path,
                             value: None,
-                            children: Children::new(),
+                            children: PackedChildren::new(),
                         }));
                         branch.children.insert(child_index, Child::Node(new_branch));
 
@@ -2331,21 +2331,24 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 let key_index = PathComponent::try_new(key_index).expect("valid component");
                 let node_index = PathComponent::try_new(node_index).expect("valid component");
 
-                let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
-                    value: None,
-                    children: Children::new(),
-                };
-
+                let shared_path: Path = path_overlap.shared.into();
                 node.update_partial_path(node_partial_path);
-                branch.children.insert(node_index, Child::Node(node));
-
                 let new_branch = Node::Branch(Box::new(BranchNode {
                     partial_path: key_partial_path,
                     value: None,
-                    children: Children::new(),
+                    children: PackedChildren::new(),
                 }));
-                branch.children.insert(key_index, Child::Node(new_branch));
+
+                let branch = BranchNode {
+                    partial_path: shared_path,
+                    value: None,
+                    children: [
+                        (node_index, Child::Node(node)),
+                        (key_index, Child::Node(new_branch)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                };
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -2386,7 +2389,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         let Some((&child_nibble, deeper)) = rest.split_first() else {
             return Some(branch);
         };
-        match &mut branch.children[child_nibble] {
+        match branch.children.get_mut(child_nibble) {
             Some(Child::Node(child_node)) => {
                 ensure_stack(|| Self::get_branch_from_nibbles_mut_helper(child_node, deeper))
             }
@@ -2478,7 +2481,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(mut branch) => {
-                        if branch.children[child_index].is_none() {
+                        if branch.children.get(child_index).is_none() {
                             // child does not exist, so the value does not exist
                             return Ok((Some(Node::Branch(branch)), None));
                         }
@@ -2560,7 +2563,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // so we can start deleting below here
                 match node {
                     Node::Branch(branch) => {
-                        self.delete_children(branch, deleted)?;
+                        self.delete_children(*branch, deleted)?;
                     }
                     Node::Leaf(_) => {
                         // the prefix matched only a leaf, so we remove it and indicate only one item was removed
@@ -2579,7 +2582,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 match node {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(mut branch) => {
-                        if branch.children[child_index].is_none() {
+                        if branch.children.get(child_index).is_none() {
                             return Ok(Some(Node::Branch(branch)));
                         }
 
@@ -2611,21 +2614,18 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// it, adding each one to `deleted`.
     fn delete_children(
         &mut self,
-        mut branch: Box<BranchNode>,
+        mut branch: BranchNode,
         deleted: &mut usize,
     ) -> Result<(), FileIoError> {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted = deleted.saturating_add(1);
         }
-        for (_, child) in &mut branch.children {
-            let Some(child) = child.take() else {
-                continue;
-            };
+        for (_, child) in std::mem::take(&mut branch.children) {
             let child = self.read_for_update(child)?;
             match child {
                 Node::Branch(child_branch) => {
-                    ensure_stack(|| self.delete_children(child_branch, deleted))?;
+                    ensure_stack(|| self.delete_children(*child_branch, deleted))?;
                 }
                 Node::Leaf(_) => {
                     *deleted = deleted.saturating_add(1);
@@ -2647,37 +2647,25 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         &mut self,
         mut branch_node: Box<BranchNode>,
     ) -> Result<Option<Node>, FileIoError> {
-        let mut children_iter = branch_node.children.each_mut().into_iter();
-
-        let (child_index, child) = loop {
-            let Some((child_index, child_slot)) = children_iter.next() else {
-                // The branch has no children. Turn it into a leaf.
-                return match branch_node.value.take() {
-                    Some(value) => Ok(Some(Node::Leaf(LeafNode {
-                        value,
-                        partial_path: std::mem::take(&mut branch_node.partial_path),
-                    }))),
-                    None => Ok(None),
-                };
+        if branch_node.children.is_empty() {
+            // The branch has no children. Turn it into a leaf.
+            return match branch_node.value.take() {
+                Some(value) => Ok(Some(Node::Leaf(LeafNode {
+                    value,
+                    partial_path: std::mem::take(&mut branch_node.partial_path),
+                }))),
+                None => Ok(None),
             };
+        }
 
-            let Some(child) = child_slot.take() else {
-                continue;
-            };
+        if branch_node.value.is_some() {
+            // The branch has a value, so it can't be flattened.
+            return Ok(Some(Node::Branch(branch_node)));
+        }
 
-            if branch_node.value.is_some() || children_iter.any(|(_, slot)| slot.is_some()) {
-                // put the child back in its slot since we removed it
-                child_slot.replace(child);
-
-                // explicitly drop the iterator to release the mutable borrow on branch_node
-                drop(children_iter);
-
-                // The branch has a value or more than 1 child, so it can't be flattened.
-                return Ok(Some(Node::Branch(branch_node)));
-            }
-
-            // we have found the only child
-            break (child_index, child);
+        let Some((child_index, child)) = branch_node.children.take_only_child() else {
+            // The branch has more than 1 child, so it can't be flattened.
+            return Ok(Some(Node::Branch(branch_node)));
         };
 
         // The branch has only 1 child. Remove the branch and return the child.
@@ -2728,7 +2716,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             let branch = BranchNode {
                 partial_path: key_nibbles.into(),
                 value: None,
-                children: Children::new(),
+                children: PackedChildren::new(),
             };
             *root = Node::Branch(Box::new(branch)).into();
             return Ok(());

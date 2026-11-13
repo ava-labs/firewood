@@ -21,6 +21,7 @@ use crate::HashableShunt;
 use crate::JoinedPath;
 use crate::MaybePersistedNode;
 use crate::NodeStore;
+use crate::PackedChildren;
 use crate::Path;
 use crate::PathComponent;
 use crate::ReadableStorage;
@@ -96,23 +97,22 @@ where
     /// and whether they are hashed or unhashed, so we need to classify them.
     pub(super) fn ethhash_classify_children<'a>(
         &self,
-        children: &'a mut Children<Option<Child>>,
+        children: &'a mut PackedChildren<Child>,
     ) -> ClassifiedChildren<'a> {
-        children.into_iter().fold(
+        children.iter_present_mut().fold(
             ClassifiedChildren {
                 unhashed: Vec::new(),
                 hashed: Vec::new(),
             },
             |mut acc, (idx, child)| {
                 match child {
-                    None => {}
-                    Some(Child::AddressWithHash(a, h)) => {
+                    Child::AddressWithHash(a, h) => {
                         // Convert address to MaybePersistedNode
                         let maybe_persisted_node = MaybePersistedNode::from(*a);
                         acc.hashed.push((idx, (maybe_persisted_node, h)));
                     }
-                    Some(Child::Node(_)) => acc.unhashed.push(idx),
-                    Some(Child::MaybePersisted(maybe_persisted, h)) => {
+                    Child::Node(_) => acc.unhashed.push(idx),
+                    Child::MaybePersisted(maybe_persisted, h) => {
                         // For MaybePersisted, it's important to remember that we've already hashed it
                         acc.hashed.push((idx, (maybe_persisted.clone(), h)));
                     }
@@ -203,11 +203,9 @@ where
             // 5. 1 hashed, >0 unhashed <-- rehash case
             // 6. everything already hashed
 
-            for (nibble, child) in &mut b.children {
-                // If this is empty or already hashed, we're done
-                // Empty matches None, and non-Node types match Some(None) here, so we want
-                // Some(Some(node))
-                let Some(child_node) = child.as_mut().and_then(|child| child.as_mut_node()) else {
+            for (nibble, child) in b.children.iter_present_mut() {
+                // An already hashed child needs no work.
+                let Some(child_node) = child.as_mut_node() else {
                     continue;
                 };
 
@@ -230,7 +228,7 @@ where
                     })?
                 };
 
-                *child = Some(Child::MaybePersisted(child_node, child_hash));
+                *child = Child::MaybePersisted(child_node, child_hash);
                 trace!("child now {child:?}");
             }
         }

@@ -817,7 +817,7 @@ mod test {
         let branch = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([3]),
             value: None,
-            children: branch_children,
+            children: branch_children.into(),
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
         let branch_hash = hash_node::<H>(&branch, &Path::from([2, 0]));
@@ -834,7 +834,7 @@ mod test {
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([2]),
             value: None,
-            children: root_children,
+            children: root_children.into(),
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
         let root_hash = hash_node::<H>(&root, &Path::new());
@@ -1048,13 +1048,16 @@ mod test {
         let branch_addr = *branch_addr;
 
         // Replace branch hash with a wrong hash
-        let (leaf_addr, _) = branch.children[PathComponent::ALL[1]]
-            .as_ref()
+        let (leaf_addr, _) = branch
+            .children
+            .get(PathComponent::ALL[1])
             .unwrap()
             .persist_info()
             .unwrap();
-        branch.children[PathComponent::ALL[1]] =
-            Some(Child::AddressWithHash(leaf_addr, HashType::empty()));
+        branch.children.insert(
+            PathComponent::ALL[1],
+            Child::AddressWithHash(leaf_addr, HashType::empty()),
+        );
         test_write_new_node(&nodestore, branch_node, branch_addr.get());
 
         // Compute the current branch hash
@@ -1071,8 +1074,9 @@ mod test {
             .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [2]))
             .unwrap();
         let root_branch = root_node.as_branch().unwrap();
-        let (_, parent_stored_hash) = root_branch.children[PathComponent::ALL[0]]
-            .as_ref()
+        let (_, parent_stored_hash) = root_branch
+            .children
+            .get(PathComponent::ALL[0])
             .unwrap()
             .persist_info()
             .unwrap();

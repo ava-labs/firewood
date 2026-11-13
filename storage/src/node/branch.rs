@@ -22,6 +22,7 @@ use crate::PathComponent;
 use crate::SharedNode;
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
+use crate::node::children::PackedChildren;
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
@@ -191,25 +192,27 @@ pub struct BranchNode {
     /// The value of the data for this branch, if any
     pub value: Option<Box<[u8]>>,
 
-    /// The children of this branch.
-    /// Element i is the child at index i, or None if there is no child at that index.
-    /// Each element is (`child_hash`, `child_address`).
-    /// `child_address` is None if we don't know the child's hash.
-    pub children: Children<Option<Child>>,
+    /// The children of this branch that exist, indexed by their position in
+    /// the branch.
+    pub children: PackedChildren<Child>,
 }
+
+// A branch is three words of bookkeeping around its partial path; its children
+// live in a heap block sized to the ones that exist.
+const _: () = assert!(size_of::<BranchNode>() == 96);
 
 impl lru_mem::HeapSize for BranchNode {
     fn heap_size(&self) -> usize {
         let value_size = self.value.as_ref().map_or(0, |v| v.len());
         let children_size: usize = self
             .children
-            .iter()
-            .filter_map(|(_, child)| child.as_ref())
-            .map(lru_mem::HeapSize::heap_size)
+            .iter_present()
+            .map(|(_, child)| child.heap_size())
             .sum();
         self.partial_path
             .heap_size()
             .wrapping_add(value_size)
+            .wrapping_add(self.children.allocated_size())
             .wrapping_add(children_size)
     }
 }
@@ -219,14 +222,13 @@ impl Debug for BranchNode {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
-        for (i, c) in &self.children {
+        for (i, c) in self.children.iter_present() {
             match c {
-                None => {}
-                Some(Child::Node(_)) => {} // TODO(rkuris)
-                Some(Child::AddressWithHash(addr, hash)) => {
+                Child::Node(_) => {} // TODO(rkuris)
+                Child::AddressWithHash(addr, hash) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
-                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                Child::MaybePersisted(maybe_persisted, hash) => {
                     // For MaybePersisted, show the address if persisted, otherwise show as unpersisted
                     match maybe_persisted.as_linear_address() {
                         Some(addr) => write!(f, "({i:?}: address={addr:?} hash={hash})")?,
@@ -256,9 +258,11 @@ impl BranchNode {
     /// yet persisted).
     #[must_use]
     pub fn persist_info(&self) -> Children<Option<(LinearAddress, &HashType)>> {
-        self.children
-            .each_ref()
-            .map(|_, c| c.as_ref().and_then(Child::persist_info))
+        let mut info = Children::new();
+        for (index, child) in self.children.iter_present() {
+            info[index] = child.persist_info();
+        }
+        info
     }
 
     /// Returns a set of hashes for each child that has a hash set.
@@ -273,9 +277,11 @@ impl BranchNode {
     /// changes will have this check implemented structurally to prevent such cases.
     #[must_use]
     pub fn children_hashes(&self) -> Children<Option<HashType>> {
-        self.children
-            .each_ref()
-            .map(|_, c| c.as_ref().and_then(Child::hash).cloned())
+        let mut hashes = Children::new();
+        for (index, child) in self.children.iter_present() {
+            hashes[index] = child.hash().cloned();
+        }
+        hashes
     }
 
     /// Returns a set of addresses for each child that has an address set.
@@ -292,9 +298,11 @@ impl BranchNode {
     /// changes will have this check implemented structurally to prevent such cases.
     #[must_use]
     pub fn children_addresses(&self) -> Children<Option<LinearAddress>> {
-        self.children
-            .each_ref()
-            .map(|_, c| c.as_ref().and_then(Child::persisted_address))
+        let mut addresses = Children::new();
+        for (index, child) in self.children.iter_present() {
+            addresses[index] = child.persisted_address();
+        }
+        addresses
     }
 }
 
@@ -303,7 +311,7 @@ impl From<&LeafNode> for BranchNode {
         BranchNode {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
-            children: Children::new(),
+            children: PackedChildren::new(),
         }
     }
 }
@@ -317,18 +325,65 @@ impl Drop for BranchNode {
         // a hashed child that may still hold its node in memory. A branch whose
         // children are all leaves or addresses, which is most of them, drops in
         // place.
-        let may_recurse = self.children.iter().any(|(_, child)| {
+        let may_recurse = self.children.iter_present().any(|(_, child)| {
             matches!(
                 child,
-                Some(Child::Node(Node::Branch(_)) | Child::MaybePersisted(..))
+                Child::Node(Node::Branch(_)) | Child::MaybePersisted(..)
             )
         });
         if may_recurse {
-            crate::stack::ensure_stack(|| {
-                for (_, child) in &mut self.children {
-                    drop(child.take());
-                }
-            });
+            crate::stack::ensure_stack(|| drop(std::mem::take(&mut self.children)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A branch reports the heap block holding its children in addition to
+    /// its path, its value, and each child's own heap size.
+    #[test]
+    fn branch_heap_size_counts_the_children_block() {
+        use lru_mem::HeapSize;
+
+        for child_count in [0, 1, 2, PathComponent::LEN] {
+            let branch = BranchNode {
+                partial_path: Path::from([1, 2, 3]),
+                value: Some(Box::from(*b"value")),
+                children: PathComponent::ALL
+                    .into_iter()
+                    .take(child_count)
+                    .map(|index| {
+                        let leaf = LeafNode {
+                            partial_path: Path::new(),
+                            value: Box::from(*b"leaf"),
+                        };
+                        (index, Child::Node(Node::Leaf(leaf)))
+                    })
+                    .collect(),
+            };
+
+            let children_heap: usize = branch
+                .children
+                .iter_present()
+                .map(|(_, child)| child.heap_size())
+                .sum();
+            let expected = branch.partial_path.heap_size()
+                + branch.value.as_ref().map_or(0, |value| value.len())
+                + branch.children.allocated_size()
+                + children_heap;
+
+            assert_eq!(
+                branch.heap_size(),
+                expected,
+                "wrong heap size with {child_count} children"
+            );
+            assert_eq!(
+                branch.children.allocated_size() == 0,
+                child_count == 0,
+                "the block is allocated exactly when there are children"
+            );
         }
     }
 }

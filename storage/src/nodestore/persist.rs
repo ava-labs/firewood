@@ -325,6 +325,7 @@ mod tests {
     use crate::MerkleDbHash;
     use crate::NodeStore;
     use crate::NodeStoreHeader;
+    use crate::PackedChildren;
     use crate::Path;
     use crate::PathComponent;
     use crate::SharedNode;
@@ -371,7 +372,7 @@ mod tests {
         let mut branch = BranchNode {
             partial_path: Path::from(path),
             value: value.map(|v| v.to_vec().into_boxed_slice()),
-            children: Children::new(),
+            children: PackedChildren::new(),
         };
 
         for (index, child) in children {
@@ -526,7 +527,7 @@ mod tests {
         let root_branch: Node = BranchNode {
             partial_path: Path::new(),
             value: None,
-            children,
+            children: children.into(),
         }
         .into();
 
@@ -599,9 +600,7 @@ mod tests {
         let root_branch = root_node.as_branch().unwrap();
         assert_eq!(root_branch.children.count(), 2);
 
-        let child1 = root_branch.children[PathComponent::ALL[1]]
-            .as_ref()
-            .unwrap();
+        let child1 = root_branch.children.get(PathComponent::ALL[1]).unwrap();
         let child1_maybe_persisted = child1.as_maybe_persisted_node();
         let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
@@ -609,9 +608,7 @@ mod tests {
         assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
 
-        let child2 = root_branch.children[PathComponent::ALL[2]]
-            .as_ref()
-            .unwrap();
+        let child2 = root_branch.children.get(PathComponent::ALL[2]).unwrap();
         let child2_maybe_persisted = child2.as_maybe_persisted_node();
         let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
