@@ -47,22 +47,24 @@ pub mod path;
 pub mod persist;
 /// A node, either a Branch or Leaf
 
-// TODO(rkuris): explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Debug, EnumAsInner)]
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
-    Branch(Box<BranchNode>),
+    Branch(BranchNode),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
 
+// A branch is held inline: its children are behind a pointer, so the type is
+// finite without a `Box`, and a lookup reaches the children block without first
+// loading a boxed branch. The tag costs a word on top of the 96-byte branch.
+const _: () = assert!(size_of::<Node>() == 104);
+
 impl lru_mem::HeapSize for Node {
     fn heap_size(&self) -> usize {
         match self {
-            Node::Branch(branch) => {
-                std::mem::size_of::<BranchNode>().wrapping_add(branch.heap_size())
-            }
+            Node::Branch(branch) => branch.heap_size(),
             Node::Leaf(leaf) => leaf.heap_size(),
         }
     }
@@ -79,7 +81,7 @@ impl Default for Node {
 
 impl From<BranchNode> for Node {
     fn from(branch: BranchNode) -> Self {
-        Node::Branch(Box::new(branch))
+        Node::Branch(branch)
     }
 }
 
@@ -177,7 +179,7 @@ impl ExtendableBytes for bumpalo::collections::Vec<'_, u8> {
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
-    pub fn partial_path(&self) -> &Path {
+    pub const fn partial_path(&self) -> &Path {
         match self {
             Node::Branch(b) => &b.partial_path,
             Node::Leaf(l) => &l.partial_path,
@@ -433,11 +435,11 @@ impl Node {
                     }
                 }
 
-                Ok(Node::Branch(Box::new(BranchNode {
+                Ok(Node::Branch(BranchNode {
                     partial_path,
                     value,
                     children: PackedChildren::from(children),
-                })))
+                }))
             }
         }
     }
@@ -455,7 +457,7 @@ impl Node {
     /// # Errors
     ///
     /// Returns an `Error` if it cannot create a `PathComponent` from a u8 index.
-    pub fn force_branch_for_insert(mut self) -> Result<Box<BranchNode>, Error> {
+    pub fn force_branch_for_insert(mut self) -> Result<BranchNode, Error> {
         // If the `partial_path` is non-empty, then create a branch that will be the new
         // root with the previous root as the child at the index returned from split_first.
         if let Some((child_index, child_path)) = self
@@ -474,7 +476,7 @@ impl Node {
             branch
                 .children
                 .insert(child_path_component, Child::Node(self));
-            Ok(branch.into())
+            Ok(branch)
         } else {
             Ok(match self {
                 Node::Leaf(leaf) => {
@@ -484,7 +486,6 @@ impl Node {
                         value: Some(leaf.value),
                         children: PackedChildren::new(),
                     }
-                    .into()
                 }
                 Node::Branch(branch) => branch,
             })
@@ -585,7 +586,7 @@ mod test {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
             value: vec![4, 5, 6, 7].into()
         }), 211; "leaf node obnoxiously long partial path")]
-    #[test_case(Node::Branch(Box::new(BranchNode {
+    #[test_case(Node::Branch(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
         children: PackedChildren::from(Children::from_fn(|i| {
@@ -594,25 +595,25 @@ mod test {
             } else {
                 None
             }
-        }))})), 45; "one child branch node with short partial path and no value"
+        }))}), 45; "one child branch node with short partial path and no value"
     )]
-    #[test_case(Node::Branch(Box::new(BranchNode {
+    #[test_case(Node::Branch(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
         // Each child's hash starts with its own nibble so a decode that pairs
         // slots with the wrong wire entries fails the round-trip comparison.
         children: PackedChildren::from(Children::from_fn(|pc|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| if i == 0 { pc.as_u8() } else { i as u8 }).into()))
-        ))})), 652; "full branch node with long partial path and value"
+        ))}), 652; "full branch node with long partial path and value"
     )]
-    #[test_case(Node::Branch(Box::new(BranchNode {
+    #[test_case(Node::Branch(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some(vec![4, 5, 6, 7].into()),
         children: PackedChildren::from(Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        ))})), 851; "full branch node with obnoxiously long partial path"
+        ))}), 851; "full branch node with obnoxiously long partial path"
     )]
-    #[test_case(Node::Branch(Box::new(BranchNode {
+    #[test_case(Node::Branch(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some((*br"
 We also need to test values that have a length longer than 255 bytes so that we
@@ -622,7 +623,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         ").into()),
         children: PackedChildren::from(Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        ))})), 1165; "full branch node with obnoxiously long partial path and long value"
+        ))}), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
     fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
         use std::io::Cursor;
@@ -651,7 +652,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         // per-byte values make a mismatch easy to spot in the failure hex dump.
         let hash_bytes: [u8; 32] = std::array::from_fn(|i| i as u8);
         let child_hash: crate::HashType = hash_bytes.into();
-        let node = Node::Branch(Box::new(BranchNode {
+        let node = Node::Branch(BranchNode {
             partial_path: Path::from(vec![0, 1]),
             value: None,
             children: PackedChildren::from(Children::from_fn(|i| {
@@ -664,7 +665,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
                     None
                 }
             })),
-        }));
+        });
 
         let mut serialized = Vec::new();
         node.as_bytes::<EthHash, _>(&mut serialized).unwrap();
@@ -789,13 +790,13 @@ mod clone_tests {
                         value: Box::from(b"sibling".as_slice()),
                     })));
             }
-            node = Node::Branch(Box::new(BranchNode {
+            node = Node::Branch(BranchNode {
                 partial_path: Path::from_nibbles_iterator(
                     [u8::try_from(level % 16).unwrap()].into_iter(),
                 ),
                 value: (level % 3 == 0).then(|| Box::from(b"v".as_slice())),
                 children: children.into(),
-            }));
+            });
         }
         node
     }
@@ -812,7 +813,7 @@ mod clone_tests {
     /// their own down to `depth`, so a branch clone re-enters `Node::clone` for
     /// several children, the last slot among them.
     fn fan_out(depth: usize) -> Node {
-        Node::Branch(Box::new(BranchNode {
+        Node::Branch(BranchNode {
             partial_path: Path::new(),
             value: Some(Box::from(b"root".as_slice())),
             children: PackedChildren::from(Children::from_fn(|pc| match pc.as_u8() % 4 {
@@ -828,7 +829,7 @@ mod clone_tests {
                 _ if depth == 0 => Some(Child::Node(leaf(pc))),
                 _ => Some(Child::Node(fan_out(depth.saturating_sub(1)))),
             })),
-        }))
+        })
     }
 
     /// A clone equals its source. `Node` derives `PartialEq`, which compares the
