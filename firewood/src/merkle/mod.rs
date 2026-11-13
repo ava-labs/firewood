@@ -1807,7 +1807,9 @@ impl<T: TrieReader> Merkle<T> {
         ))
     }
 
-    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    /// Returns the value associated with the given `key`, if any.
+    #[cfg_attr(feature = "test_utils", expect(clippy::missing_errors_doc))]
+    pub fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
@@ -2394,7 +2396,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub(crate) fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    #[cfg_attr(feature = "test_utils", expect(clippy::missing_errors_doc))]
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
 
