@@ -3,9 +3,9 @@
 Apply these firewood-specific checks whenever reviewing code, suggesting changes, or
 providing inline feedback — in addition to general best practices.
 
-We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
+We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the workspace `Cargo.toml` under `[workspace.lints.clippy]`.
 
-By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, see [Using unwrap() in Rust is Okay](https://burntsushi.net/unwrap/) by [Andrew Gallant](https://burntsushi.net).
 
 ## Rust
 
@@ -116,14 +116,18 @@ information. Write what the code cannot say for itself — the invariant, the
 reason for the ordering, the failure the guard prevents, the layout of the bytes
 on disk. This comment loses, and deleting it improves the file:
 
-    // Increment the count.
-    self.count += 1;
+```rust
+// Increment the count.
+self.count += 1;
+```
 
 This one wins, because nothing in the surrounding code states it:
 
-    // Publish the free-list head only after the node is durable. A crash
-    // between the two leaks the space; the reverse order can hand out an
-    // address that still holds a live node.
+```rust
+// Publish the free-list head only after the node is durable. A crash
+// between the two leaks the space; the reverse order can hand out an
+// address that still holds a live node.
+```
 
 Be deliberate about what each comment carries:
 
@@ -198,16 +202,18 @@ Instead:
 In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
 the canonical documentation is both DRY and convenient — prefer it:
 
-    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
-    /// rather than a committed revision.
-    ///
-    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
-    /// and key-encoding requirements.
-    ///
-    /// # Safety
-    ///
-    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
-    /// a [`ReconstructedHandle`].
+```rust
+/// Produce an `eth_getProof`-compatible proof against a reconstructed view
+/// rather than a committed revision.
+///
+/// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+/// and key-encoding requirements.
+///
+/// # Safety
+///
+/// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+/// a [`ReconstructedHandle`].
+```
 
 In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
 clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
@@ -219,8 +225,10 @@ principle and does not treat DRY as overriding, and the
 [Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
 favor clarity and consistency:
 
-    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
-    // view. It returns [ErrDroppedReconstructed] if the view has been released.
+```go
+// EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
+// view. It returns [ErrDroppedReconstructed] if the view has been released.
+```
 
 [google-go-style]: https://google.github.io/styleguide/go/guide
 [uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
