@@ -36,15 +36,17 @@ pub struct CreateRangeProofArgs<'a> {
     /// The start key must be less than the end key if both are provided.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to prove. If `None`, the range ends at the end
-    /// of the keyspace or until `max_length` items have been included in
-    /// the proof.
+    /// of the keyspace or where the proof stops early (see `max_length`).
     ///
     /// If provided, end key is inclusive if not truncated. Otherwise, the end
     /// key will be the final key in the returned key-value pairs.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs to include in the proof. If the
     /// range contains more items than this, the proof will be truncated. If
-    /// `0`, there is no limit.
+    /// `0`, there is no count limit.
+    ///
+    /// Whatever `max_length` is, generation also stops at
+    /// [`firewood::api::PROOF_GENERATION_BUDGET`].
     pub max_length: u32,
 }
 

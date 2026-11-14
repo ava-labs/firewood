@@ -67,6 +67,18 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 /// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
+/// Byte budget for the key-value pairs or batch operations that range and
+/// change proof generation collects. Each item is counted as the proof body
+/// encodes it: its key and value with their length prefixes, plus a batch
+/// operation's tag byte. Generation stops before an item that would take the
+/// total past this budget, whatever the caller's limit. The first item is
+/// always kept, so every proof makes progress. The caller resumes after the
+/// last key in the proof.
+///
+/// The budget leaves room for the boundary proofs within the body size that
+/// decoders accept (see [`ProofError::BodyTooLarge`]).
+pub const PROOF_GENERATION_BUDGET: usize = crate::proofs::MAX_DECOMPRESSED_LEN - 1024 * 1024;
+
 /// Rejects a batch operation that no proposal path may apply: a key or prefix
 /// longer than [`MAX_KEY_BYTES`], or, under the Ethereum hash scheme, a `Put`
 /// with an empty value, which that scheme hashes the same as no value.
@@ -398,7 +410,8 @@ pub trait DbView {
     ///
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
-    /// * `limit` - The maximum number of keys in the range proof
+    /// * `limit` - The maximum number of keys in the range proof. Whatever the
+    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`].
     #[expect(clippy::missing_errors_doc)]
     fn range_proof<K: KeyType>(
         &self,
@@ -475,7 +488,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
-    /// * `limit` - The maximum number of keys in the range proof
+    /// * `limit` - The maximum number of keys in the range proof. Whatever the
+    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`].
     #[expect(clippy::missing_errors_doc)]
     fn range_proof(
         &self,

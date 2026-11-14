@@ -1138,3 +1138,37 @@ fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack<H: HashMode>() 
 fn test_collapse_range_contains(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
     assert_eq!(CollapseRange { start, end }.contains(node), expected);
 }
+
+/// Runs [`collect_within_budget`] over items whose size is their value, and
+/// returns how many it kept and the next item it left in the iterator.
+fn collect_sizes(sizes: &[usize], limit: Option<usize>, budget: usize) -> (usize, Option<usize>) {
+    let mut iter = sizes.iter().copied().map(Ok::<usize, ()>).peekable();
+    let kept = collect_within_budget(&mut iter, limit.and_then(NonZeroUsize::new), budget, |&n| n)
+        .unwrap();
+    (kept.len(), iter.next().transpose().unwrap())
+}
+
+#[test_case(&[], None, 10 => (0, None) ; "no items")]
+#[test_case(&[100, 1], None, 10 => (1, Some(1)) ; "first item over the budget is still taken")]
+#[test_case(&[1, 1], None, 0 => (1, Some(1)) ; "zero budget still takes the first item")]
+#[test_case(&[5, 5, 7], None, 10 => (2, Some(7)) ; "takes items that fill the budget exactly")]
+#[test_case(&[5, 4, 7], None, 10 => (2, Some(7)) ; "leaves the item that would cross the budget")]
+#[test_case(&[1, 1, 1], Some(2), 100 => (2, Some(1)) ; "stops at the limit before the budget")]
+#[test_case(&[1, 1], None, 100 => (2, None) ; "stops at the end of the items")]
+fn test_collect_within_budget(
+    sizes: &[usize],
+    limit: Option<usize>,
+    budget: usize,
+) -> (usize, Option<usize>) {
+    collect_sizes(sizes, limit, budget)
+}
+
+/// [`collect_within_budget`] returns the first error the iterator yields.
+#[test]
+fn test_collect_within_budget_returns_the_first_error() {
+    let mut iter = [Ok(1usize), Err("first"), Err("second")]
+        .into_iter()
+        .peekable();
+    let result = collect_within_budget(&mut iter, None, 100, |&n| n);
+    assert_eq!(result.map(|kept| kept.len()), Err("first"));
+}
