@@ -13,8 +13,7 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +37,8 @@ jobs:
   # Derives the bench matrix from cargo metadata rather than a hand-maintained
   # list, so adding a `[[bench]]` target needs no change here.
   discover:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -70,6 +71,8 @@ jobs:
   # Skipped on a filtered dispatch: `--workspace --benches` would build every
   # target to support a subset, and a filtered run has no cache obligation.
   build:
+    permissions:
+      contents: read
     if: ${{ !inputs.bench-filter }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -85,6 +88,8 @@ jobs:
         run: ./scripts/run-just.sh ci-rust build-benches "$PROFILE_KEY"
 
   bench:
+    permissions:
+      contents: read
     name: bench (${{ matrix.package }} / ${{ matrix.bench }})
     needs: discover
     strategy:
@@ -117,6 +122,7 @@ jobs:
   # Recombines the per-leg artifacts so `benchmark-results` remains a single
   # download, as it was when the benches ran in one job.
   merge-results:
+    permissions: {}
     needs: bench
     runs-on: ubuntu-latest
     steps:
@@ -136,6 +142,7 @@ jobs:
   # `build` is the one job allowed to be skipped, because a filtered dispatch
   # deliberately skips it; a skipped `bench` still fails the run.
   benchmarks-required:
+    permissions: {}
     if: ${{ always() }}
     needs:
       - discover
