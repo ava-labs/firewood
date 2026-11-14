@@ -29,6 +29,7 @@ location:
 | --- | --- | --- |
 | [Firewood mdBook Documentation Site](2026-06-17-mdbook-documentation-site.md) | 2026-06-17 | active |
 | [On-disk format and addressing](2024-08-13-on-disk-format-and-addressing.md) | 2024-08-13 | active |
+| [Development container](2026-06-22-devcontainer.md) | 2026-06-22 | active |
 
 Subsystems not yet documented as designs are tracked in
 [ava-labs/firewood#2139](https://github.com/ava-labs/firewood/issues/2139).
