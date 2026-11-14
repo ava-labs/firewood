@@ -333,6 +333,7 @@ pub(crate) mod types;
 
 pub use self::change::ChangeProof;
 pub use self::change::ChangeProofVerificationContext;
+pub use self::change::VerifiedChangeProof;
 pub use self::change::find_next_key_after_change_proof;
 pub use self::change::verify_change_proof_structure;
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
@@ -342,6 +343,7 @@ pub use self::holes::KeySpan;
 pub use self::range::KeyRange;
 pub use self::range::RangeProof;
 pub use self::range::RangeProofVerificationContext;
+pub use self::range::VerifiedRangeProof;
 pub use self::range::find_next_key_after_range_proof;
 pub use self::range::verify_range_proof_structure;
 pub use self::reader::ReadError;
