@@ -18,7 +18,8 @@ use syn::parse_macro_input;
 ///
 /// # Usage
 ///
-/// Place above `#[test]` or `#[test_case(...)]` and import both concrete modes
+/// Place above exactly one `#[test]`, exactly one `#[test_matrix(...)]`, or one
+/// or more `#[test_case(...)]`, and import both concrete modes
 /// (`crate::{EthHash, MerkleDbHash}` inside storage):
 ///
 /// ```rust,ignore
@@ -36,7 +37,8 @@ use syn::parse_macro_input;
 ///
 /// - Use a synchronous, safe, non-const Rust free function with one `H: HashMode`
 ///   parameter, no `where` clause, and concrete argument/return types. Arguments
-///   must be simple named bindings; test arguments require `test_case`.
+///   must be simple named bindings; test arguments require `test_case` or
+///   `test_matrix`.
 /// - Reserve the original function name and both generated test names.
 /// - Test attributes apply to both wrappers; lint attributes apply to the generic
 ///   body. Put wrapper-specific lint settings on the enclosing module.

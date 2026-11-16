@@ -6,6 +6,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::TrieHash;
 
@@ -66,13 +67,24 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 /// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
-/// Rejects a key longer than [`MAX_KEY_BYTES`].
-pub(crate) const fn check_key_len(key: &[u8]) -> Result<(), Error> {
-    if key.len() > MAX_KEY_BYTES {
-        return Err(Error::KeyTooLong {
-            len: key.len(),
+/// Rejects a batch operation that no proposal path may apply: a key or prefix
+/// longer than [`MAX_KEY_BYTES`], or, under the Ethereum hash scheme, a `Put`
+/// with an empty value, which that scheme hashes the same as no value.
+pub(crate) fn check_batch_op<H: HashMode>(
+    op: &BatchOp<impl KeyType, impl ValueType>,
+) -> Result<(), CreateProposalError> {
+    let len = op.key().as_ref().len();
+    if len > MAX_KEY_BYTES {
+        return Err(CreateProposalError::KeyTooLong {
+            len,
             max: MAX_KEY_BYTES,
         });
+    }
+    if H::ALGORITHM.is_ethereum()
+        && let BatchOp::Put { value, .. } = op
+        && value.as_ref().is_empty()
+    {
+        return Err(CreateProposalError::EmptyValue);
     }
     Ok(())
 }
@@ -221,6 +233,11 @@ pub enum Error {
     /// A key in a proposed batch is longer than [`MAX_KEY_BYTES`].
     #[error("key of {len} bytes exceeds the supported maximum of {max} bytes")]
     KeyTooLong { len: usize, max: usize },
+
+    /// A proposed batch puts an empty value under the Ethereum hash scheme,
+    /// which hashes an empty value the same as no value.
+    #[error("empty values are not stored under the Ethereum hash scheme, delete the key instead")]
+    EmptyValue,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -277,6 +294,7 @@ impl From<CreateProposalError> for Error {
                 Error::InvalidConversionToPathComponent
             }
             CreateProposalError::KeyTooLong { len, max } => Error::KeyTooLong { len, max },
+            CreateProposalError::EmptyValue => Error::EmptyValue,
         }
     }
 }

@@ -60,7 +60,8 @@ as well as carefully managing the free list during the creation and expiration o
 - `Key` - Represents an individual byte array used to index into a trie. A `Key`
   usually has a specific `Value`.
 - `Value` - Represents a byte array for the value of a specific `Key`. Values can
-  contain 0-N bytes. In particular, a zero-length `Value` is valid.
+  contain 0-N bytes. A zero-length `Value` is valid under merkledb hashing. The
+  Ethereum hash scheme rejects it on write.
 - `Key Proof` - A proof that a `Key` exists within a specific revision of a trie.
   This includes the hash for the node containing the `Key` as well as all parents.
 - `Range Proof` - A proof that consists of two `Key Proof`s, one for the start of

@@ -171,6 +171,9 @@ impl<T: KeyValuePair<Error = std::convert::Infallible>, E: Into<FileIoError>> Ke
 /// To store an empty value or to express deletions explicitly, use [`BatchOp`]
 /// directly instead of a tuple. The FFI layer uses an explicit tagged enum for
 /// this reason — see the FFI `BatchOp` type for details.
+///
+/// Under the Ethereum hash scheme a [`BatchOp::Put`] with an empty value is
+/// rejected with [`Error::EmptyValue`](crate::api::Error::EmptyValue).
 pub trait TryIntoBatch {
     /// The key type
     type Key: KeyType;
@@ -219,7 +222,8 @@ impl<K: KeyType, V: ValueType> TryIntoBatch for (K, V) {
         let (key, value) = self;
         // A tuple cannot distinguish "put empty value" from "delete by prefix",
         // so empty values are interpreted as prefix deletions. Use `BatchOp`
-        // directly when you need to store an empty value.
+        // directly when you need to store an empty value. The Ethereum hash
+        // scheme rejects one.
         if value.as_ref().is_empty() {
             Ok(BatchOp::DeleteRange { prefix: key })
         } else {

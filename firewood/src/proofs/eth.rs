@@ -274,11 +274,10 @@ impl AccountFields {
 
 /// Encode one child slot of a branch as an [`RlpItem`] for proof emission.
 ///
-/// Distinct from `firewood_storage::nodestore::hash::child_to_rlp_item`,
-/// which is account-depth-only and treats inline-RLP children as
-/// `unreachable!()`. This emitter runs at any depth, so it must surface
-/// inline-RLP children as `RlpItem::Raw` (verbatim inlining) for a
-/// verifier to walk them.
+/// Encodes a child the same way as `child_to_rlp_item` in
+/// `firewood_storage::nodestore::hash`, which is private to that crate. An
+/// inline-RLP child is emitted verbatim as `RlpItem::Raw` so a verifier can
+/// walk it.
 fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),

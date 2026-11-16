@@ -1,7 +1,7 @@
 # See https://doc.rust-lang.org/clippy/lint_configuration.html
 # for full configuration options.
 
-msrv = "1.94"
+msrv = "1.100"
 
 allow-unwrap-in-tests = true
 allow-indexing-slicing-in-tests = true

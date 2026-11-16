@@ -199,15 +199,13 @@ where
     Ok(EthProof {
         account_proof,
         storage_proofs,
-        ..fields
-            .map(|f| EthProof {
-                nonce: f.nonce,
-                balance: f.balance,
-                code_hash: f.code_hash,
-                storage_hash: f.storage_root,
-                ..EthProof::default()
-            })
-            .unwrap_or_default()
+        ..fields.map_or_default(|f| EthProof {
+            nonce: f.nonce,
+            balance: f.balance,
+            code_hash: f.code_hash,
+            storage_hash: f.storage_root,
+            ..EthProof::default()
+        })
     })
 }
 
