@@ -59,12 +59,14 @@
 use std::num::NonZeroUsize;
 
 use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
 
 use super::types::Proof;
 use super::types::ProofCollection;
 use crate::api;
 use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
+use crate::merkle::subtrees_right_of;
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
 
@@ -217,6 +219,41 @@ pub fn find_next_key_after_range_proof(
         super::lex_successor(last_key),
         verification.end_key.clone(),
     )))
+}
+
+/// Nibble prefixes of the subtrees still to fetch after this range proof, in
+/// key order.
+///
+/// Each prefix names a non-empty subtree the end proof shows between the proven
+/// right edge and the requested end. Together they hold every remaining key, so
+/// the first prefix is where the next request can start. The last one may
+/// straddle the requested end. Empty when the proof covers the request.
+///
+/// A prefix of odd length ends mid-byte: its smallest key pads the last nibble
+/// with zero, and [`prefix_upper_bound`] gives its exclusive end.
+///
+/// [`prefix_upper_bound`]: firewood_storage::prefix_upper_bound
+///
+/// # Errors
+///
+/// Returns [`ProofError::ShouldBePrefixOfNextKey`] if `verification` came from
+/// a different proof whose end proof is not a root-to-leaf path.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "state sync, the only caller, is not yet merged")
+)]
+pub(crate) fn remaining_subtrees_after_range_proof(
+    proof: &FrozenRangeProof,
+    verification: &RangeProofVerificationContext,
+) -> Result<Vec<PathBuf>, api::Error> {
+    let Some(edge) = verification.right_edge_key() else {
+        return Ok(Vec::new());
+    };
+    Ok(subtrees_right_of(
+        proof.end_proof(),
+        edge,
+        verification.end_key(),
+    )?)
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs

@@ -74,6 +74,7 @@ jobs:
       - uses: $/.github/actions/setup-rust
         with:
           targets: ${{ matrix.target }}
+          components: llvm-tools
           cache-key: ${{ matrix.target }}
           cache-save: "true"
 
@@ -87,6 +88,9 @@ jobs:
 
       - name: Build for ${{ matrix.target }}
         run: cargo build-static-ffi --target ${{ matrix.target }}
+
+      - name: Strip LLVM bitcode sections
+        run: ffi/scripts/strip-lto-sections.sh "target/${{ matrix.target }}/maxperf/libfirewood_ffi.a"
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
@@ -202,10 +206,10 @@ jobs:
   test-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
     needs: push-firewood-ffi-libs
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -225,7 +229,10 @@ jobs:
   remove-if-pr-only:
     runs-on: ubuntu-24.04
     needs: [push-firewood-ffi-libs, test-firewood-ffi-libs]
-    if: needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
+    # always() is required: without a status function, GitHub skips this job
+    # whenever a job in `needs` fails, so a failing test-firewood-ffi-libs
+    # would leave the pr/ branch behind in firewood-go.
+    if: always() && needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
     permissions:
       # Give the GITHUB_TOKEN write permission to delete the
       # branch created by the previous job if it is a pull request.

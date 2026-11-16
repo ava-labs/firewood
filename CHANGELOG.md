@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-11-12
+
+### 🚀 Features
+
+- *(storage)* Add prefix_upper_bound and PathComponent::checked_next ([#2333](https://github.com/ava-labs/firewood/pull/2333))
+- *(proofs)* List the subtrees a range proof leaves unfetched ([#2396](https://github.com/ava-labs/firewood/pull/2396))
+
+### 🐛 Bug Fixes
+
+- *(proofs)* Authenticate an out-of-range end-proof terminal ([#2377](https://github.com/ava-labs/firewood/pull/2377))
+- *(storage)* Hash an inline storage child at account depth ([#2380](https://github.com/ava-labs/firewood/pull/2380))
+- *(db)* Reject an empty value put under the Ethereum hash scheme ([#2359](https://github.com/ava-labs/firewood/pull/2359))
+- *(storage)* Validate the high water mark when reading the header ([#2393](https://github.com/ava-labs/firewood/pull/2393))
+- *(ffi)* Strip LLVM bitcode from prebuilt Go static libs ([#2399](https://github.com/ava-labs/firewood/pull/2399))
+
+### 🧪 Testing
+
+- *(macros)* Support test_matrix in #[hash_mode] ([#2392](https://github.com/ava-labs/firewood/pull/2392))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(benchmark)* Remove aaron and amin from launch SSH users ([#2386](https://github.com/ava-labs/firewood/pull/2386))
+- Pass untrusted workflow values to shell through env vars ([#2391](https://github.com/ava-labs/firewood/pull/2391))
+- *(publish)* Use crates.io trusted publishing ([#2394](https://github.com/ava-labs/firewood/pull/2394))
+
 ## [0.9.0] - 2026-11-03
 
 ### 🚀 Features
