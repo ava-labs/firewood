@@ -1040,7 +1040,7 @@ mod tests {
         let mut iter = merkle.key_value_iter_from_key(start.unwrap_or_default());
 
         // we iterate twice because we should get a None then start over
-        for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
+        for k in start.map_or_default(|r| r[0])..=u8::MAX {
             let next = iter.next().map(|kv| {
                 let (k, v) = kv.unwrap();
                 assert_eq!(&*k, &*v);

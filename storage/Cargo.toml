@@ -40,16 +40,16 @@ derive-where = "1.7.0"
 enum-as-inner = "0.7.0"
 git-version = "0.3.9"
 indicatif = "0.18.6"
-lru = "0.18.5"
+lru = "0.19.0"
 lru-mem = "0.3.0"
 parking_lot.workspace = true
 triomphe = "0.1.17"
 weak-table = "0.4.0"
 # Optional dependencies
-log = { version = "0.4.34", optional = true }
+log = { version = "0.4.35", optional = true }
 sha3 = "0.12.0"
 bumpalo = { version = "3.20.3", features = ["collections", "std"] }
-arc-swap = "1.9.2"
+arc-swap = "1.9.5"
 arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] }
 
 [dev-dependencies]
@@ -72,7 +72,7 @@ sha2.workspace = true
 # target. The `io-uring` feature itself stays portable and is a no-op elsewhere;
 # see build.rs for the `cfg(io_uring)` alias that gates the code on both.
 [target.'cfg(target_os = "linux")'.dependencies]
-io-uring = { version = "0.7.15", optional = true }
+io-uring = { version = "0.7.16", optional = true }
 
 [features]
 logger = ["log", "firewood-metrics/logger"]

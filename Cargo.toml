@@ -10,7 +10,7 @@ members = [
   "storage",
   "triehash",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
@@ -18,7 +18,7 @@ license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.94.0"
+rust-version = "1.100.0"
 
 [profile.release]
 debug = true
@@ -76,18 +76,18 @@ env_logger = "0.11.11"
 fastrace = "0.7.19"
 hex = "0.4.3"
 integer-encoding = "4.1.0"
-log = "0.4.34"
+log = "0.4.35"
 metrics = "0.24.6"
 metrics-util = "0.20.4"
 metrics-collector-prometheus = "0.1.0"
 nonzero_ext = "0.3.0"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 rand_distr = "0.6.0"
 sha2 = "0.11.1"
 sha3 = "0.12.0"
-smallvec = { version = "1.16.3", features = ["write", "union", "const_new"] }
+smallvec = { version = "1.16.5", features = ["write", "union", "const_new"] }
 stacker = "0.1.25"
-test-case = "3.4.0"
+test-case = "3.4.1"
 thiserror = "2.0.21"
 
 # common dev dependencies

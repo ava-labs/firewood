@@ -219,8 +219,8 @@ fn failure_context(state: &CloudInitState) -> String {
 }
 
 fn stage_name(state: &CloudInitState, step: usize) -> &str {
-    state.stages.get(step.saturating_sub(1)).map_or_else(
-        || {
+    state.stages.get(step.saturating_sub(1)).map_or(
+        {
             if step == state.step {
                 state.name.as_str()
             } else {

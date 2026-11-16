@@ -15,7 +15,7 @@
 # variable) is disabled per entry rather than for the file.
 
 # shellcheck disable=SC2034
-FIREWOOD_RUST_VERSION=1.94.1
+FIREWOOD_RUST_VERSION=1.100.0
 
 # Matches the `go` directive in ffi/go.mod, so provisioned hosts build the FFI
 # with the toolchain CI tests it against. .github/workflows/verify-go-versions.yaml
