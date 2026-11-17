@@ -1751,11 +1751,11 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
                 value: b"\x0Fabc".to_vec().into_boxed_slice(),
             })));
-            let branch1 = Node::Branch(Box::new(BranchNode {
+            let branch1 = Node::Branch(BranchNode {
                 partial_path: Path::new(),
                 value: None,
                 children: children.into(),
-            }));
+            });
 
             let mut children = Children::new();
             children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
@@ -1766,21 +1766,21 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
                 value: b"\xFFabc".to_vec().into_boxed_slice(),
             })));
-            let branch2 = Node::Branch(Box::new(BranchNode {
+            let branch2 = Node::Branch(BranchNode {
                 partial_path: Path::new(),
                 value: None,
                 children: children.into(),
-            }));
+            });
 
             let mut children = Children::new();
             children[PathComponent::ALL[0x0]] = Some(Child::Node(branch1));
             children[PathComponent::ALL[0xF]] = Some(Child::Node(branch2));
 
-            *root = Some(Node::Branch(Box::new(BranchNode {
+            *root = Some(Node::Branch(BranchNode {
                 partial_path: Path::new(),
                 value: None,
                 children: children.into(),
-            })));
+            }));
         }
 
         let proposal = NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(proposal)?;
@@ -1987,11 +1987,11 @@ mod tests {
                 for _ in 0..DEPTH {
                     let mut children = Children::new();
                     children[PathComponent::ALL[0]] = Some(Child::Node(node));
-                    node = Node::Branch(Box::new(BranchNode {
+                    node = Node::Branch(BranchNode {
                         partial_path: Path::new(),
                         value: None,
                         children: children.into(),
-                    }));
+                    });
                 }
 
                 reconstructed
@@ -2022,11 +2022,11 @@ mod tests {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"xyz")),
             value: b"vf".to_vec().into_boxed_slice(),
         })));
-        recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
+        recon.root_mut().replace(Node::Branch(BranchNode {
             partial_path: Path::new(),
             value: None,
             children: children.into(),
-        })));
+        }));
 
         let reconstructed: NodeStore<Reconstructed<_, H>, _, H> = recon.into();
 

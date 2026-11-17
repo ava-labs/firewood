@@ -99,7 +99,7 @@ fn leaf(c: &mut Criterion) {
 
 fn branch(c: &mut Criterion) {
     let mut group = c.benchmark_group("has_value");
-    let mut input = Node::Branch(Box::new(firewood_storage::BranchNode {
+    let mut input = Node::Branch(firewood_storage::BranchNode {
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice()),
         children: PackedChildren::from(Children::from_fn(|i| {
@@ -112,7 +112,7 @@ fn branch(c: &mut Criterion) {
                 None
             }
         })),
-    }));
+    });
 
     group.bench_with_input("manual", &input, manual_serializer);
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
