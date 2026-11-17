@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/toolchain-versions.sh
-. "$SCRIPT_DIR/../../infra/toolchain-versions.sh"
+. "$SCRIPT_DIR/../../../infra/toolchain-versions.sh"
 
 RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"

@@ -127,7 +127,7 @@ the `just` recipes in [CONTRIBUTING.md](CONTRIBUTING.md) to build and test so
 the right channel is selected for each task.
 
 More detailed build instructions, including some scripts,
-can be found in the [benchmark setup scripts](benchmark/setup-scripts).
+can be found in the [benchmark setup scripts](fwdctl/launch/setup-scripts).
 
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
