@@ -4,6 +4,7 @@
 // hash benchmarks; run with 'cargo bench'
 
 use std::fs::File;
+use std::hint::black_box;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
@@ -105,6 +106,58 @@ fn bench_merkle<H: HashMode, const NKEYS: usize, const KEYSIZE: usize>(criterion
         });
 }
 
+// Times reads and removes on a trie large enough to have branches several
+// levels deep with a varying number of children. Three keys, as in
+// `bench_merkle`, build a single branch.
+#[expect(clippy::unwrap_used)]
+fn bench_merkle_read_remove<H: HashMode, const NKEYS: usize, const KEYSIZE: usize>(
+    criterion: &mut Criterion,
+) {
+    let rng = &firewood_storage::SeededRng::from_option(Some(1234));
+    let keys: Vec<Vec<u8>> = repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEYSIZE).collect())
+        .take(NKEYS)
+        .collect();
+    let build = || {
+        let store = Arc::new(MemStore::new(Vec::new()));
+        let nodestore: NodeStore<_, _, H> =
+            NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
+        let mut merkle = Merkle::from(nodestore);
+        for key in &keys {
+            merkle.insert(key, Box::new(*b"v")).unwrap();
+        }
+        merkle
+    };
+
+    let mut group = criterion.benchmark_group(format!("MerkleLarge/{:?}", H::ALGORITHM));
+    group.sample_size(30);
+
+    // Reads go through a hashed trie, whose children are shared nodes. A read
+    // of an unhashed trie clones the subtree under the key instead.
+    let merkle = build().hash();
+    group.bench_function("get", |b| {
+        b.iter(|| {
+            for key in &keys {
+                black_box(merkle.get_value(key).unwrap());
+            }
+        });
+    });
+
+    group.bench_function("remove", |b| {
+        b.iter_batched(
+            build,
+            |mut merkle| {
+                for key in &keys {
+                    black_box(merkle.remove(key).unwrap());
+                }
+                merkle
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
 #[expect(clippy::unwrap_used)]
 fn bench_db<H: HashMode, const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
@@ -148,7 +201,9 @@ criterion_group! {
               bench_db::<MerkleDbHash, 100>,
               bench_merkle::<EthHash, 3, 4>,
               bench_merkle::<EthHash, 3, 32>,
-              bench_db::<EthHash, 100>
+              bench_db::<EthHash, 100>,
+              bench_merkle_read_remove::<MerkleDbHash, 10_000, 32>,
+              bench_merkle_read_remove::<EthHash, 10_000, 32>
 }
 
 criterion_main!(benches);
