@@ -137,7 +137,7 @@ pub struct TemplateContext {
     pub cli_overrides: HashMap<String, String>,
 }
 
-const DEFAULT_CONFIG: &str = include_str!("../../../benchmark/launch/launch-stages.yaml");
+const DEFAULT_CONFIG: &str = include_str!("../../launch/launch-stages.yaml");
 
 impl StageConfig {
     /// # Errors

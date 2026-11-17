@@ -83,7 +83,7 @@ EOF
 # add firewood's dashboard and also node exporter full
 mkdir -p /var/lib/grafana/dashboards
 # TODO(amin): replace this with script dir
-wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json
+wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/fwdctl/launch/Grafana-dashboard.json
 wget -O /var/lib/grafana/dashboards/node_exporter_full.json https://grafana.com/api/dashboards/1860/revisions/latest/download
 
 # Configure prometheus to scrape avalanchego. A full node (e.g. the `validator`

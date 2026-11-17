@@ -50,9 +50,9 @@ ffi/                  # Foreign Function Interface (FFI) binding for Golang
 ├── proposal.go       # Go wrapper around the Firewood `Proposal` type
 └── revision.go       # Go wrapper around the Firewood `DbView` type
 fwdctl/               # CLI tool for interacting with Firewood databases
+└── launch/           # Launch stage config and host setup scripts used by `fwdctl launch`
 benchmark/            # Performance benchmarking suite
-├── bootstrap/        # Script for running C-Chain reexecution benchmark on an EC2 instance.
-└── setup-scripts/    # Scripts for setting up benchmark environments
+└── bootstrap/        # Script for running C-Chain reexecution benchmark on an EC2 instance.
 ```
 
 ## Important Terminology
