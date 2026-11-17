@@ -171,11 +171,11 @@ fn leaf(name: &str, partial_path: Path) {
 #[test_case("one_child", vec![0, 1], None, 15 ; "one_child")]
 #[test_case("with_value", vec![0, 1, 2, 3], Some(vec![4, 5, 6, 7]), 0 ; "with_value")]
 fn branch<H: HashMode>(name: &str, path: Vec<u8>, value: Option<Vec<u8>>, child: u8) {
-    let node = Node::Branch(Box::new(BranchNode {
+    let node = Node::Branch(BranchNode {
         partial_path: Path::from(path),
         value: value.map(Into::into),
         children: PackedChildren::from(Children::from_fn(child_at(child))),
-    }));
+    });
     let mut buf = Vec::new();
     node.as_bytes::<H, _>(&mut buf).unwrap();
     insta::assert_snapshot!(hash_mode_name(H::ALGORITHM, name), hex::encode(buf));

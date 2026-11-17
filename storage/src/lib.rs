@@ -199,9 +199,11 @@ impl std::ops::Deref for CachedNode {
 
 impl lru_mem::HeapSize for CachedNode {
     fn heap_size(&self) -> usize {
-        // Arc overhead plus the inner Node's heap size
-        // Note: We count the full Node size since this is the primary reference
-        self.0.heap_size()
+        // The `Arc` allocation holds a reference count and the `Node` itself;
+        // `Node::heap_size` counts only what the node owns beyond that.
+        size_of::<usize>()
+            .wrapping_add(size_of::<Node>())
+            .wrapping_add(self.0.heap_size())
     }
 }
 
@@ -555,6 +557,22 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cached_node_tests {
+    use lru_mem::HeapSize;
+
+    use super::*;
+
+    /// The cache charges a node for its shared allocation as well as for what
+    /// the node owns, so a cached leaf with no heap data still costs a `Node`.
+    #[test]
+    fn cached_node_counts_the_shared_allocation() {
+        let cached = CachedNode(SharedNode::new(Node::default()));
+        assert_eq!(cached.0.heap_size(), 0);
+        assert!(cached.heap_size() > size_of::<Node>());
+    }
 }
 
 #[cfg(test)]
