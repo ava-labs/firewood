@@ -274,17 +274,19 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
         };
 
-        // Temporarily take ownership of the child so we can resolve it to a
-        // mutable Node, recurse, and put the (possibly modified) node back.
-        let Some(child) = branch.children.take(child_component) else {
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
+        // Resolve the child to a mutable Node, recurse, and put the (possibly
+        // modified) node back.
+        branch.children.try_update(child_component, |child| {
+            let Some(child) = child else {
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
 
-        let child_node = self.read_for_update(child)?;
-        let child_node = ensure_stack(|| {
-            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)
+            let child_node = self.read_for_update(child)?;
+            let child_node = ensure_stack(|| {
+                self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)
+            })?;
+            Ok(Some(Child::Node(child_node)))
         })?;
-        branch.children[child_component] = Some(Child::Node(child_node));
         Ok(node)
     }
 
@@ -310,21 +312,24 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
         };
 
-        let Some(child) = branch.children.take(first) else {
-            // No child pointer exists on path to child proof node.
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
+        branch.children.try_update(first, |child| {
+            let Some(child) = child else {
+                // No child pointer exists on path to child proof node.
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
 
-        let mut child_node = self.read_for_update(child)?;
+            let mut child_node = self.read_for_update(child)?;
 
-        let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
+            let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
 
-        let after_child = consume_partial_path(remaining, &child_node)?;
+            let after_child = consume_partial_path(remaining, &child_node)?;
 
-        child_node =
-            ensure_stack(|| self.collapse_strip(child_node, after_child, &child_prefix, range))?;
+            child_node = ensure_stack(|| {
+                self.collapse_strip(child_node, after_child, &child_prefix, range)
+            })?;
 
-        branch.children[first] = Some(Child::Node(child_node));
+            Ok(Some(Child::Node(child_node)))
+        })?;
         Ok(node)
     }
 
@@ -472,20 +477,22 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         }
 
         // Recurse into the on-path child.
-        let Some(child) = branch.children.take(on_path) else {
-            // No child pointer exists on path to child proof node.
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
+        branch.children.try_update(on_path, |child| {
+            let Some(child) = child else {
+                // No child pointer exists on path to child proof node.
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
 
-        let mut child_node = self.read_for_update(child)?;
-        let deeper = consume_partial_path(remaining, &child_node)?;
-        if !deeper.is_empty() {
-            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
-            child_node =
-                ensure_stack(|| self.collapse_strip(child_node, deeper, &child_prefix, range))?;
-        }
+            let mut child_node = self.read_for_update(child)?;
+            let deeper = consume_partial_path(remaining, &child_node)?;
+            if !deeper.is_empty() {
+                let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
+                child_node =
+                    ensure_stack(|| self.collapse_strip(child_node, deeper, &child_prefix, range))?;
+            }
 
-        branch.children[on_path] = Some(Child::Node(child_node));
+            Ok(Some(Child::Node(child_node)))
+        })?;
 
         // A valued node is never flattened. When it has a single child,
         // merging into that child would drop the value and hide a forged or

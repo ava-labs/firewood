@@ -255,8 +255,7 @@ impl ParallelMerkle {
 
         let child_root = root_branch
             .children
-            .get_mut(first_path_component)
-            .take()
+            .remove(first_path_component)
             .map(|child| -> Result<_, FileIoError> {
                 match child {
                     Child::Node(node) => Ok(node),
@@ -310,7 +309,16 @@ impl ParallelMerkle {
                     proposal.delete_nodes(response.deleted_nodes.as_slice());
 
                     // Set the child at index to response.root which is the root of the child's subtrie.
-                    *root_branch.children.get_mut(response.first_path_component) = response.root;
+                    match response.root {
+                        Some(root) => {
+                            root_branch
+                                .children
+                                .insert(response.first_path_component, root);
+                        }
+                        None => {
+                            root_branch.children.remove(response.first_path_component);
+                        }
+                    }
                 }
                 Err(err) => {
                     return Err(err); // Early termination.
