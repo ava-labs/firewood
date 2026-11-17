@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794953887860,
+  "lastUpdate": 1794953938612,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -187,6 +187,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 5851.130405001892,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "id": "6ece35c8204b76e28469ed1e1a4185777cfc6a3b",
+          "message": "perf(storage)!: store inline RLP in a fixed 32-byte InlineRlp\n\n`HashType::Rlp` held a `SmallVec` even though an inline encoding is never\nlonger than 31 bytes. `InlineRlp` stores a length byte and a 31-byte array,\nso `HashType` is 33 bytes with no heap allocation and derives `Copy`, as\ndoes `TrieHash`; clones of either across the workspace become copies.\n\n`InlineRlp` holds 1 to 31 bytes. The hasher falls back to a full hash for\nanything longer, as before. `HashType::from_reader` now rejects a stored\ninline length of 32, which it accepted before; the hasher never wrote one.\nThe proof decoder rejects inline children of 0 or more than 31 bytes, with\n`InvalidInlineRlpLength` for construction from a slice. Writers and the\non-disk and proof formats are unchanged.\n\nBREAKING CHANGE: `firewood-storage`'s `HashType::Rlp` holds an `InlineRlp`\nand `HashType` and `TrieHash` are `Copy`. `firewood`'s\n`ProofNode::child_hashes` element type changes with it.",
+          "timestamp": "2026-11-17T18:35:24Z",
+          "url": "https://github.com/ava-labs/firewood/commit/6ece35c8204b76e28469ed1e1a4185777cfc6a3b"
+        },
+        "date": 1794953937742,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.6359261521145,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6074.008409780835,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 107.44882799452058,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5.604215976778876,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 5957.029701356897,
             "unit": "block_accept_ms/ggas"
           }
         ]
