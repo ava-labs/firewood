@@ -1647,7 +1647,7 @@ fn collect_within_budget<T, E>(
         bytes = bytes.saturating_add(size(&item));
         items.push(item);
     }
-    Ok(items.into_boxed_slice())
+    Ok(items.into())
 }
 
 impl<T: TrieReader> Merkle<T> {

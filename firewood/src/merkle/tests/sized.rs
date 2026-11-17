@@ -631,7 +631,7 @@ fn full_diff<T: HashedNodeReader>(
     source: &Merkle<T>,
 ) -> Vec<BatchOp<Key, Value>> {
     target
-        .change_proof_with_budget(None, None, source.nodestore(), None, usize::MAX)
+        .change_proof(None, None, source.nodestore(), None)
         .unwrap()
         .batch_ops()
         .to_vec()
@@ -720,7 +720,8 @@ fn assert_well_filled<P>(chunks: &[SizedProof<P>], budget: usize) {
 
 /// The wire decodes, verifies against the root, and is byte-equal to the
 /// plain range proof of the same length. The plain proof's byte budget is off
-/// because a chunk of compressible values can exceed it.
+/// because a chunk of compressible values can exceed it, as in
+/// `test_sized_constant_values_stay_decodable`.
 fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
     merkle: &Merkle<T>,
     start: Option<&[u8]>,

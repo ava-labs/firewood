@@ -3101,12 +3101,7 @@ fn test_max_bounded_depth_survives_default_stack<H: HashMode>() {
     });
 }
 
-/// Range proofs over more data than [`PROOF_GENERATION_BUDGET`] split at the
-/// budget, and paging with [`find_next_key_after_range_proof`] fetches every
-/// key once, in order.
-///
-/// [`PROOF_GENERATION_BUDGET`]: crate::api::PROOF_GENERATION_BUDGET
-/// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
+/// Paging past the byte budget fetches every key once, in order.
 #[hash_mode]
 #[test_case(None, None ; "no limit")]
 #[test_case(Some(128), None ; "limit covers every key")]
