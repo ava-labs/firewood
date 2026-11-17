@@ -2587,6 +2587,57 @@ mod test {
         assert_eq!(value, new_value.as_ref());
     }
 
+    /// Closing immediately after a commit races the persist worker. Whichever
+    /// side wins, the persist must be recorded as a cycle.
+    #[hash_mode]
+    #[test]
+    fn test_persist_cycle_recorded_when_closed_after_commit<H: HashMode>() {
+        use metrics_util::debugging::DebugValue;
+        use metrics_util::debugging::DebuggingRecorder;
+
+        const ITERATIONS: usize = 300;
+
+        // The persist worker runs on its own thread, which a thread-local
+        // recorder does not reach, so install a global one.
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        recorder.install().unwrap();
+        let samples = || {
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(k, _, _, _)| {
+                    k.key().name() == crate::registry::PERSIST_CYCLE_DURATION_SECONDS
+                })
+                .map(|(_, _, _, v)| match v {
+                    DebugValue::Histogram(h) => h.len(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+        };
+
+        let mut missed = Vec::new();
+        for i in 0..ITERATIONS {
+            let before = samples();
+            let db = TestDb::<H>::new();
+            let batch = vec![BatchOp::Put {
+                key: b"foo",
+                value: b"bar",
+            }];
+            db.propose(batch).unwrap().commit().unwrap();
+            drop(db);
+            if samples() == before {
+                missed.push(i);
+            }
+        }
+        assert!(
+            missed.is_empty(),
+            "no persist cycle recorded in {} of {ITERATIONS} runs: {missed:?}",
+            missed.len()
+        );
+    }
+
     #[hash_mode]
     #[test]
     fn test_deferred_persist_close_with_high_max_persistence_gap<H: HashMode>() {

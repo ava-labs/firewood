@@ -58,6 +58,7 @@ test_utils = ["firewood-storage/test_utils"]
 # Workspace dependencies
 clap = { workspace = true, features = ['derive'] }
 criterion.workspace = true
+metrics-util.workspace = true
 env_logger.workspace = true
 ethereum-types.workspace = true
 firewood-storage = { workspace = true, features = ["test_utils"] }

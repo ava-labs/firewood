@@ -564,19 +564,28 @@ impl<H: HashMode> PersistLoop<H> {
                 firewood_counter!(COMMITS_TOTAL).increment(1);
             }
 
-            firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
-                .record(cycle_start.elapsed().as_secs_f64());
+            Self::record_cycle(cycle_start);
         }
 
-        // Persist the last unpersisted revision on shutdown
+        // Persist the last unpersisted revision on shutdown. A shutdown that
+        // races a commit can reach here without the loop above having run a
+        // cycle, so this persist counts as one.
         if let Some(revision) = self.shared.persist_on_shutdown.get().cloned()
             && !self.shared.channel.empty()
         {
+            let cycle_start = std::time::Instant::now();
             self.persist_to_disk(&revision)
                 .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+            Self::record_cycle(cycle_start);
         }
 
         Ok(())
+    }
+
+    /// Records the duration of a persist cycle that began at `cycle_start`.
+    fn record_cycle(cycle_start: std::time::Instant) {
+        firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
+            .record(cycle_start.elapsed().as_secs_f64());
     }
 
     /// Persists the revision to disk.
