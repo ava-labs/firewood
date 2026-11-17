@@ -799,7 +799,7 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
         if !at_account_depth
             && let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child
         {
-            child_hashes[nibble] = Some(hash.clone());
+            child_hashes[nibble] = Some(*hash);
             continue;
         }
         child_prefix.push(nibble);
@@ -818,7 +818,7 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
         for (index, hash) in pn.child_hashes.iter_present() {
             let nibble = PathComponent(index);
             if outside.is_set(nibble.0) {
-                child_hashes[nibble] = Some(hash.clone());
+                child_hashes[nibble] = Some(*hash);
             }
         }
     }
@@ -1403,7 +1403,7 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
         proving_merkle.nodestore(),
     )?;
 
-    let expected = HashType::from(root_hash.clone());
+    let expected = HashType::from(*root_hash);
     if computed != expected {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash {
             expected,

@@ -227,7 +227,7 @@ impl<'db> RangeProofContext<'db> {
         let mut allow_rebase = true;
         let proposal_handle = match self.proposal_state.take() {
             Some(ProposalState::Committed(hash)) => {
-                self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+                self.proposal_state = Some(ProposalState::Committed(hash));
                 return Ok(hash);
             }
             Some(ProposalState::Proposed(proposal)) => proposal,
@@ -255,7 +255,7 @@ impl<'db> RangeProofContext<'db> {
 
         let hash = result?;
         firewood_counter!(MERGE_COUNT).increment(1);
-        self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+        self.proposal_state = Some(ProposalState::Committed(hash));
 
         Ok(hash)
     }
@@ -281,7 +281,7 @@ impl<'db> RangeProofContext<'db> {
         // and its root already matches the verification target, the receiver
         // is up-to-date and no further fetching is needed.
         let root_hash = match self.proposal_state {
-            Some(ProposalState::Committed(ref hash)) => Ok(hash.clone()),
+            Some(ProposalState::Committed(ref hash)) => Ok(*hash),
             Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;

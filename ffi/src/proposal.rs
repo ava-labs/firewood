@@ -74,7 +74,7 @@ impl ProposalHandle<'_> {
     /// Returns the root hash of the proposal.
     #[must_use]
     pub fn hash_key(&self) -> Option<crate::HashKey> {
-        self.hash_key.clone().map(Into::into)
+        self.hash_key.map(Into::into)
     }
 
     /// Consume and commit a proposal.

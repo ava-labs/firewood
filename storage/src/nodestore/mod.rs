@@ -291,7 +291,7 @@ impl Parentable for Arc<ImmutableProposal> {
     fn root_hash(&self) -> Option<TrieHash> {
         self.root
             .as_ref()
-            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
+            .and_then(|root| root.hash().copied().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
         self.root.as_ref().map(Child::as_maybe_persisted_node)
@@ -322,14 +322,14 @@ impl Parentable for Committed {
             hash: self
                 .root
                 .as_ref()
-                .and_then(|root| root.hash().cloned().map(HashType::into_triehash)),
+                .and_then(|root| root.hash().copied().map(HashType::into_triehash)),
             id: self.id,
         }
     }
     fn root_hash(&self) -> Option<TrieHash> {
         self.root
             .as_ref()
-            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
+            .and_then(|root| root.hash().copied().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
         self.root.as_ref().map(Child::as_maybe_persisted_node)
@@ -809,7 +809,7 @@ impl ImmutableProposal {
     /// is another proposal.
     fn committed_parent_hash(&self) -> CommittedParentHash {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed { hash, .. } => CommittedParentHash::Hash(hash.clone()),
+            NodeStoreParent::Committed { hash, .. } => CommittedParentHash::Hash(*hash),
             NodeStoreParent::Proposed(_) => CommittedParentHash::NotCommitted,
         }
     }
@@ -1361,7 +1361,7 @@ where
     // because reconstructed views don't benefit much from multiple threads.
     fn root_hash(&self) -> Option<TrieHash> {
         if let Some(hash) = self.kind.hash.get() {
-            return Some(hash.clone());
+            return Some(*hash);
         }
         let swap = self.kind.root.as_ref()?;
         let current = swap.load_full();
@@ -1377,7 +1377,7 @@ where
         swap.store(TriompheArc::new(hashed_shared));
         let hash = hash.into_triehash();
         // If another thread raced us on the hash too, discard ours — same value.
-        let _ = self.kind.hash.set(hash.clone());
+        let _ = self.kind.hash.set(hash);
         Some(hash)
     }
 }
@@ -1832,7 +1832,7 @@ mod tests {
 
         // Reconstruct using with_root
         let restored: NodeStore<Committed, _, H> = NodeStore::with_root(
-            root_hash.clone(),
+            root_hash,
             root_address,
             storage,
             DeletedNodeTracking::Enabled,
@@ -1948,7 +1948,7 @@ mod tests {
         let first_hash = reconstructed.root_hash();
         // After hashing, the root hash is memoized in the OnceLock
         assert!(first_hash.is_some());
-        assert_eq!(reconstructed.kind.hash.get().cloned(), first_hash);
+        assert_eq!(reconstructed.kind.hash.get().copied(), first_hash);
         let second_hash = reconstructed.root_hash();
         assert_eq!(first_hash, second_hash);
     }

@@ -516,7 +516,7 @@ impl<H: HashMode> Db<H> {
         // advertises a different mode.
         let verification = verify_change_proof_structure(
             proof,
-            end_root.clone(),
+            end_root,
             start_key,
             end_key,
             H::ALGORITHM,
@@ -1108,7 +1108,7 @@ mod test {
 
         let ethereum_root = ethereum_db.root_hash().expect("committed trie has a root");
         assert_eq!(
-            hex::encode(ethereum_root.clone()),
+            hex::encode(ethereum_root),
             "59b697a4db0c475540486215c1e8f64945a4a0ad8d291de6cd9021c4fbf639dd"
         );
         let ethereum_proof = ethereum_db
@@ -1120,7 +1120,7 @@ mod test {
 
         let merkledb_root = merkledb_db.root_hash().expect("committed trie has a root");
         assert_eq!(
-            hex::encode(merkledb_root.clone()),
+            hex::encode(merkledb_root),
             "1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9"
         );
         let merkledb_proof = merkledb_db
@@ -1283,7 +1283,7 @@ mod test {
 
         assert_eq!(db.root_hash().as_ref(), Some(&root));
 
-        let historical = db.revision(root.clone()).unwrap();
+        let historical = db.revision(root).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
 
         let next_root = db
@@ -2187,7 +2187,7 @@ mod test {
 
         // get the last committed revision
         let last_root_hash = db.root_hash().unwrap();
-        let committed = db.revision(last_root_hash.clone()).unwrap();
+        let committed = db.revision(last_root_hash).unwrap();
 
         // the last root hash should be the same as the last proposal root hash
         assert_eq!(last_root_hash, last_proposal_root_hash);
@@ -2417,7 +2417,7 @@ mod test {
 
         // Verify that we can access all revisions with their correct values
         for (root_hash, value) in &revisions {
-            let revision = db.revision(root_hash.clone()).unwrap();
+            let revision = db.revision(*root_hash).unwrap();
             let retrieved_value = revision.val(key).unwrap().unwrap();
             assert_eq!(value.as_slice(), retrieved_value.as_ref());
         }
@@ -2427,7 +2427,7 @@ mod test {
         // Verify that we can access all revisions with their correct values
         // after reopening
         for (root_hash, value) in &revisions {
-            let revision = db.revision(root_hash.clone()).unwrap();
+            let revision = db.revision(*root_hash).unwrap();
             let retrieved_value = revision.val(key).unwrap().unwrap();
             assert_eq!(value.as_slice(), retrieved_value.as_ref());
         }
@@ -2552,10 +2552,7 @@ mod test {
 
         // Verify that all revisions were persisted
         for (i, root_hash) in root_hashes.iter().enumerate() {
-            let is_persisted = db
-                .manager
-                .revision_persist_status(root_hash.clone())
-                .unwrap();
+            let is_persisted = db.manager.revision_persist_status(*root_hash).unwrap();
 
             assert!(
                 is_persisted,
@@ -2656,7 +2653,7 @@ mod test {
             .iter()
             .rev()
             .take(max_persistence_gap.saturating_add(1))
-            .any(|hash| db.manager.revision_persist_status(hash.clone()).unwrap());
+            .any(|hash| db.manager.revision_persist_status(*hash).unwrap());
 
         assert!(
             any_persisted,
@@ -2745,7 +2742,7 @@ mod test {
         for (i, hash) in root_hashes.iter().enumerate() {
             let is_persisted = db
                 .manager
-                .revision_persist_status(hash.clone())
+                .revision_persist_status(*hash)
                 .is_ok_and(|persisted| persisted);
 
             if is_persisted {
@@ -2803,7 +2800,7 @@ mod test {
             .iter()
             .filter(|&hash| {
                 db.manager
-                    .revision_persist_status(hash.clone())
+                    .revision_persist_status(*hash)
                     .is_ok_and(|is_persisted| is_persisted)
             })
             .count();
