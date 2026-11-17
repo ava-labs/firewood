@@ -559,9 +559,7 @@ impl<H: HashMode> PersistLoop<H> {
             }
 
             if let Some(revision) = persist_data.latest_committed.take() {
-                self.persist_to_disk(&revision)
-                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
-                firewood_counter!(COMMITS_TOTAL).increment(1);
+                self.persist_revision(&revision)?;
             }
 
             firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
@@ -572,10 +570,20 @@ impl<H: HashMode> PersistLoop<H> {
         if let Some(revision) = self.shared.persist_on_shutdown.get().cloned()
             && !self.shared.channel.empty()
         {
-            self.persist_to_disk(&revision)
-                .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+            let cycle_start = std::time::Instant::now();
+            self.persist_revision(&revision)?;
+            firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
+                .record(cycle_start.elapsed().as_secs_f64());
         }
 
+        Ok(())
+    }
+
+    /// Persists the revision to disk and records its root in the `RootStore`.
+    fn persist_revision(&self, revision: &CommittedRevision<H>) -> Result<(), PersistError> {
+        self.persist_to_disk(revision)
+            .and_then(|()| self.maybe_save_to_root_store(revision))?;
+        firewood_counter!(COMMITS_TOTAL).increment(1);
         Ok(())
     }
 
