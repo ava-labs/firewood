@@ -25,6 +25,7 @@ pub use branch::Child;
 pub use children::Children;
 pub use children::ChildrenSlots;
 pub use children::DenseChildren;
+pub use children::PackedChildren;
 use enum_as_inner::EnumAsInner;
 use integer_encoding::VarInt;
 use integer_encoding::VarIntReader as _;
