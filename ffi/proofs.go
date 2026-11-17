@@ -111,11 +111,10 @@ type codeIterator struct {
 
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
 // included in the tree with the current root. The proof may be truncated to at
-// most [maxLength] entries, if non-zero. Whatever [maxLength] is, generation also
-// stops at firewood's byte budget (api::PROOF_GENERATION_BUDGET in the Rust
-// crate). If either [startKey] or [endKey] is Nothing, the range is unbounded in
-// that direction. If [rootHash] is Nothing, the current root of the database is
-// used.
+// most [maxLength] entries, if non-zero, and stops early once its keys and values
+// reach about 5 MiB. If either [startKey] or [endKey] is Nothing, the range is
+// unbounded in that direction. If [rootHash] is Nothing, the current root of the
+// database is used.
 func (db *Database) RangeProof(
 	rootHash Hash,
 	startKey, endKey Maybe[[]byte],
@@ -402,10 +401,9 @@ func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
 
 // ChangeProof returns a proof that the changes between [startRoot] and
 // [endRoot] for keys in the range [startKey, endKey]. The proof may be
-// truncated to at most [maxLength] entries, if non-zero. Whatever [maxLength] is,
-// generation also stops at firewood's byte budget (api::PROOF_GENERATION_BUDGET
-// in the Rust crate). If either [startKey] or [endKey] is Nothing, the range is
-// unbounded in that direction.
+// truncated to at most [maxLength] entries, if non-zero, and stops early once its
+// keys and values reach about 5 MiB. If either [startKey] or [endKey] is Nothing,
+// the range is unbounded in that direction.
 func (db *Database) ChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],

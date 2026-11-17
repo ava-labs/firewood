@@ -3101,11 +3101,9 @@ fn test_max_bounded_depth_survives_default_stack<H: HashMode>() {
     });
 }
 
-/// A range proof whose keys and values are larger than
-/// [`PROOF_GENERATION_BUDGET`] stops at that budget: with no limit, with a
-/// limit that covers every key, and with an end key. Each proof serializes and
-/// verifies, and resuming wherever [`find_next_key_after_range_proof`] says
-/// fetches every key in the range once, in order.
+/// Range proofs over more data than [`PROOF_GENERATION_BUDGET`] split at the
+/// budget, and paging with [`find_next_key_after_range_proof`] fetches every
+/// key once, in order.
 ///
 /// [`PROOF_GENERATION_BUDGET`]: crate::api::PROOF_GENERATION_BUDGET
 /// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof

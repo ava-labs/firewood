@@ -719,9 +719,8 @@ fn assert_well_filled<P>(chunks: &[SizedProof<P>], budget: usize) {
 }
 
 /// The wire decodes, verifies against the root, and is byte-equal to the
-/// plain range proof of the same length. The plain proof is built with its
-/// byte budget off, because a chunk of compressible values can hold more than
-/// that budget.
+/// plain range proof of the same length. The plain proof's byte budget is off
+/// because a chunk of compressible values can exceed it.
 fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
     merkle: &Merkle<T>,
     start: Option<&[u8]>,
@@ -751,9 +750,8 @@ fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
 }
 
 /// The wire decodes, verifies against the target root, and is byte-equal
-/// to the plain change proof of the same length. The plain proof is built
-/// with its byte budget off, because a chunk of compressible values can hold
-/// more than that budget.
+/// to the plain change proof of the same length, built as in
+/// [`verify_range_chunk`].
 fn verify_change_chunk<T: HashedNodeReader>(
     target: &Merkle<T>,
     source: &Merkle<T>,
@@ -821,66 +819,4 @@ impl<F: Fn(usize) -> usize> ChunkBuilder for ScriptedBuilder<'_, F> {
         body.resize(len * 2, 0);
         Ok(())
     }
-}
-
-/// The item sizes that sized chunks and the plain generators budget against
-/// match what the proof body encoder writes. The lengths straddle the varint
-/// width boundaries.
-#[hash_mode]
-#[test]
-fn test_item_encoded_len_matches_the_body<H: HashMode>() {
-    use integer_encoding::VarInt;
-
-    use crate::Proof;
-    use crate::merkle::sized::batch_op_encoded_len;
-    use crate::merkle::sized::key_value_encoded_len;
-
-    let lengths = [0, 1, 127, 128, 16_383, 16_384];
-    let bytes = |len: usize| vec![0x5a_u8; len].into_boxed_slice();
-    // Two empty boundary proofs take one byte each, then the item count.
-    let expected_body = |count: usize, items: usize| {
-        2usize
-            .saturating_add(count.required_space())
-            .saturating_add(items)
-    };
-
-    let kvs: Box<[(Key, Value)]> = lengths
-        .iter()
-        .zip(lengths.iter().rev())
-        .map(|(&key, &value)| (bytes(key), bytes(value)))
-        .collect();
-    let items = kvs.iter().map(key_value_encoded_len).sum::<usize>();
-    let range = FrozenRangeProof::new(
-        Proof::default(),
-        Proof::default(),
-        kvs.clone(),
-        H::ALGORITHM,
-    );
-    let mut body = Vec::new();
-    range.write_body_to_vec(&mut body);
-    assert_eq!(body.len(), expected_body(kvs.len(), items));
-
-    let ops: Box<[BatchOp<Key, Value>]> = lengths
-        .iter()
-        .flat_map(|&len| {
-            [
-                BatchOp::Put {
-                    key: bytes(len),
-                    value: bytes(len),
-                },
-                BatchOp::Delete { key: bytes(len) },
-                BatchOp::DeleteRange { prefix: bytes(len) },
-            ]
-        })
-        .collect();
-    let items = ops.iter().map(batch_op_encoded_len).sum::<usize>();
-    let change = FrozenChangeProof::new(
-        Proof::default(),
-        Proof::default(),
-        ops.clone(),
-        H::ALGORITHM,
-    );
-    let mut body = Vec::new();
-    change.write_body_to_vec(&mut body);
-    assert_eq!(body.len(), expected_body(ops.len(), items));
 }

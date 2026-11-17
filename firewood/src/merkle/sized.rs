@@ -593,21 +593,17 @@ fn edge_bytes(body_len: usize, costs: &[usize], count: usize) -> usize {
     )
 }
 
-/// Bytes that `bytes` takes in a proof body: its varint length prefix, then
-/// the bytes.
 fn encoded_sequence_len(bytes: &[u8]) -> usize {
     bytes.len().required_space().saturating_add(bytes.len())
 }
 
-/// Bytes a key-value pair takes in a range proof body: the key, then the
-/// value, each with its length prefix.
+/// Bytes a key-value pair takes in a range proof body.
 pub(super) fn key_value_encoded_len((key, value): &(Key, Value)) -> usize {
     encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
 }
 
 /// Bytes a batch operation takes in a change proof body: one tag byte and the
-/// key, plus the value of a `Put`. The key and value each carry a length
-/// prefix.
+/// key, plus the value of a `Put`.
 pub(super) fn batch_op_encoded_len(op: &BatchOp<Key, Value>) -> usize {
     let tag_and_key = encoded_sequence_len(op.key()).saturating_add(1);
     match op {
