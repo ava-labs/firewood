@@ -259,7 +259,7 @@ impl Node {
         match self {
             Node::Branch(b) => {
                 let child_iter = b.children.iter_present();
-                let childcount = child_iter.clone().count();
+                let childcount = b.children.count();
 
                 // encode the first byte
                 let pp_len = match b.partial_path.len() {
@@ -436,7 +436,7 @@ impl Node {
                 Ok(Node::Branch(Box::new(BranchNode {
                     partial_path,
                     value,
-                    children,
+                    children: PackedChildren::from(children),
                 })))
             }
         }
@@ -466,7 +466,7 @@ impl Node {
             let mut branch = BranchNode {
                 partial_path: Path::new(),
                 value: None,
-                children: Children::default(),
+                children: PackedChildren::new(),
             };
             self.update_partial_path(child_path);
             let child_path_component = PathComponent::try_new(child_index)
@@ -482,7 +482,7 @@ impl Node {
                     BranchNode {
                         partial_path: Path::new(),
                         value: Some(leaf.value),
-                        children: Children::default(),
+                        children: PackedChildren::new(),
                     }
                     .into()
                 }
@@ -568,6 +568,7 @@ mod test {
     use crate::MerkleDbHash;
     use crate::NibblesIterator;
     use crate::NodeHashAlgorithm;
+    use crate::PackedChildren;
     use crate::Path;
     use crate::node::BranchNode;
     use crate::node::LeafNode;
@@ -587,29 +588,29 @@ mod test {
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
-        children: Children::from_fn(|i| {
+        children: PackedChildren::from(Children::from_fn(|i| {
             if i.as_u8() == 15 {
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
             } else {
                 None
             }
-        })})), 45; "one child branch node with short partial path and no value"
+        }))})), 45; "one child branch node with short partial path and no value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
         // Each child's hash starts with its own nibble so a decode that pairs
         // slots with the wrong wire entries fails the round-trip comparison.
-        children: Children::from_fn(|pc|
+        children: PackedChildren::from(Children::from_fn(|pc|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| if i == 0 { pc.as_u8() } else { i as u8 }).into()))
-        )})), 652; "full branch node with long partial path and value"
+        ))})), 652; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: Children::from_fn(|_|
+        children: PackedChildren::from(Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 851; "full branch node with obnoxiously long partial path"
+        ))})), 851; "full branch node with obnoxiously long partial path"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
@@ -619,9 +620,9 @@ verify that we decode the entire value every time. previously, we would only rea
 the first byte for the value length, which is incorrect if the length is greater
 than 126 bytes as the length would be encoded in multiple bytes.
         ").into()),
-        children: Children::from_fn(|_|
+        children: PackedChildren::from(Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 1165; "full branch node with obnoxiously long partial path and long value"
+        ))})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
     fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
         use std::io::Cursor;
@@ -653,7 +654,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         let node = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from(vec![0, 1]),
             value: None,
-            children: Children::from_fn(|i| {
+            children: PackedChildren::from(Children::from_fn(|i| {
                 if i.as_u8() == 15 {
                     Some(Child::AddressWithHash(
                         LinearAddress::new(1).unwrap(),
@@ -662,7 +663,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
                 } else {
                     None
                 }
-            }),
+            })),
         }));
 
         let mut serialized = Vec::new();
@@ -793,7 +794,7 @@ mod clone_tests {
                     [u8::try_from(level % 16).unwrap()].into_iter(),
                 ),
                 value: (level % 3 == 0).then(|| Box::from(b"v".as_slice())),
-                children,
+                children: children.into(),
             }));
         }
         node
@@ -814,7 +815,7 @@ mod clone_tests {
         Node::Branch(Box::new(BranchNode {
             partial_path: Path::new(),
             value: Some(Box::from(b"root".as_slice())),
-            children: Children::from_fn(|pc| match pc.as_u8() % 4 {
+            children: PackedChildren::from(Children::from_fn(|pc| match pc.as_u8() % 4 {
                 0 => Some(Child::Node(leaf(pc))),
                 1 => Some(Child::AddressWithHash(
                     LinearAddress::new(u64::from(pc.as_u8()).saturating_add(64)).unwrap(),
@@ -826,7 +827,7 @@ mod clone_tests {
                 )),
                 _ if depth == 0 => Some(Child::Node(leaf(pc))),
                 _ => Some(Child::Node(fan_out(depth.saturating_sub(1)))),
-            }),
+            })),
         }))
     }
 
@@ -854,7 +855,7 @@ mod clone_tests {
         let mut cursor = copy.as_branch_mut().expect("chain(5) is a branch");
         for _ in 0..3 {
             let slot = PathComponent::try_new(0).unwrap();
-            let Some(Child::Node(Node::Branch(next))) = cursor.children[slot].as_mut() else {
+            let Some(Child::Node(Node::Branch(next))) = cursor.children.get_mut(slot) else {
                 panic!("the chain descends through slot 0")
             };
             cursor = next;
