@@ -38,6 +38,7 @@
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
 use std::cell::RefCell;
+use std::mem::DropGuard;
 
 use metrics::SharedString;
 
@@ -225,22 +226,22 @@ const DEFAULT_DB_TAG: SharedString = SharedString::const_str("untagged");
 /// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
 pub struct MetricsContextGuard {
-    previous: Option<MetricsContext>,
+    _restore: DropGuard<Option<MetricsContext>, fn(Option<MetricsContext>)>,
 }
 
-impl Drop for MetricsContextGuard {
-    fn drop(&mut self) {
-        METRICS_CONTEXT.with(|context| {
-            context.replace(self.previous.take());
-        });
-    }
+fn restore_metrics_context(previous: Option<MetricsContext>) {
+    METRICS_CONTEXT.with(|context| {
+        context.replace(previous);
+    });
 }
 
 /// Sets the thread-local metrics context for the duration of the returned guard.
 #[must_use]
 pub fn set_metrics_context(context: Option<MetricsContext>) -> MetricsContextGuard {
     let previous = METRICS_CONTEXT.with(|current| current.replace(context));
-    MetricsContextGuard { previous }
+    MetricsContextGuard {
+        _restore: DropGuard::new(previous, restore_metrics_context),
+    }
 }
 
 /// Returns the current thread-local metrics context, if one is set.
