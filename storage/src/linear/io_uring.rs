@@ -4,6 +4,7 @@
 use std::cmp::Ordering;
 use std::io;
 use std::io::ErrorKind;
+use std::mem::DropGuard;
 use std::os::fd::RawFd;
 
 use derive_where::derive_where;
@@ -95,7 +96,7 @@ struct WriteBatch<'batch, 'ring, I> {
     /// If we somehow return from `write_batch` with outstanding entries, the
     /// buffers may be dropped while the kernel is still using them, which is
     /// undefined behavior; the guard aborts the process instead.
-    outstanding: self::drop_guard::DropGuard<Outstanding<'batch>>,
+    outstanding: DropGuard<Outstanding<'batch>, fn(Outstanding<'batch>)>,
 
     /// A backlog of entries that were taken from the `entries` iterator but
     /// could not be submitted to the kernel yet.
@@ -260,8 +261,8 @@ impl IoUringProxy {
             }
         }
 
-        // batch.is_finished() is true here, so we can forget the drop guard
-        let outstanding = batch.outstanding.forget();
+        // batch.is_finished() is true here, so we can dismiss the drop guard
+        let outstanding = DropGuard::dismiss(batch.outstanding);
         debug_assert!(
             outstanding.is_empty(),
             "io-uring write batch finished with {} outstanding entries",
@@ -896,12 +897,12 @@ mod errors {
 
 /// Builds the guard that enforces the batch never ends with outstanding writes.
 ///
-/// The guard is forgotten on the normal exit path, so its check runs only when
+/// The guard is dismissed on the normal exit path, so its check runs only when
 /// the batch exits early.
-fn outstanding_guard<'batch>() -> drop_guard::DropGuard<Outstanding<'batch>> {
-    drop_guard::DropGuard::new(
+fn outstanding_guard<'batch>() -> DropGuard<Outstanding<'batch>, fn(Outstanding<'batch>)> {
+    DropGuard::new(
         Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
-        |outstanding| assert_drained(outstanding, abort_with),
+        |outstanding| assert_drained(&outstanding, abort_with),
     )
 }
 
@@ -937,90 +938,15 @@ fn abort_with(message: &str) -> ! {
     std::process::abort()
 }
 
-/// The drop guard runs a check against its value when dropped.
-///
-/// This is inside its own module to avoid accidentally exposing the inner
-/// `value`.
-mod drop_guard {
-    use std::mem::ManuallyDrop;
-    use std::ops::Deref;
-    use std::ops::DerefMut;
-
-    pub(super) struct DropGuard<T, F: FnOnce(&T) = fn(&T)> {
-        value: ManuallyDrop<T>,
-        /// The check run against the value when the guard is dropped. It
-        /// enforces an invariant of the code using the guard and is expected to
-        /// diverge (abort or panic) when the invariant is violated.
-        check: ManuallyDrop<F>,
-    }
-
-    impl<T, F: FnOnce(&T)> DropGuard<T, F> {
-        pub(super) const fn new(value: T, check: F) -> Self {
-            Self {
-                value: ManuallyDrop::new(value),
-                check: ManuallyDrop::new(check),
-            }
-        }
-
-        /// Forget the guard without running the check; and return the
-        /// inner value.
-        ///
-        /// This must take ownership of `self` to ensure the guard is forgotten
-        /// and cannot be used afterward.
-        pub(super) fn forget(self) -> T {
-            let mut this = ManuallyDrop::new(self);
-            #[expect(unsafe_code)]
-            // SAFETY: we are forgetting the guard; therefore, we must drop the
-            // check and move the value without running the `Drop` handler
-            // on the guard. `ManuallyDrop(self)` ensures that.
-            unsafe {
-                ManuallyDrop::drop(&mut this.check);
-                ManuallyDrop::take(&mut this.value)
-            }
-        }
-    }
-
-    impl<T, F: FnOnce(&T)> Drop for DropGuard<T, F> {
-        fn drop(&mut self) {
-            #[expect(unsafe_code)]
-            // SAFETY: we are in the `Drop` handler; therefore, it is safe to
-            // take ownership of the check to call it. `Drop` ensures this
-            // is only called once and the values within the manually dropped
-            // are not used afterward.
-            let (value, check) = unsafe {
-                (
-                    ManuallyDrop::take(&mut self.value),
-                    ManuallyDrop::take(&mut self.check),
-                )
-            };
-            check(&value);
-        }
-    }
-
-    impl<T, F: FnOnce(&T)> Deref for DropGuard<T, F> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            &self.value
-        }
-    }
-
-    impl<T, F: FnOnce(&T)> DerefMut for DropGuard<T, F> {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.value
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
+    use std::mem::DropGuard;
     use std::panic::AssertUnwindSafe;
     use std::panic::catch_unwind;
 
     use super::Outstanding;
     use super::QueueEntry;
     use super::assert_drained;
-    use super::drop_guard::DropGuard;
 
     const SECRET: &[u8] = b"SECRET";
 
@@ -1030,10 +956,10 @@ mod test {
 
     fn guard_with_entry(
         offset: u64,
-    ) -> DropGuard<Outstanding<'static>, impl FnOnce(&Outstanding<'static>)> {
+    ) -> DropGuard<Outstanding<'static>, impl FnOnce(Outstanding<'static>)> {
         let mut outstanding = Outstanding::with_capacity(1);
         outstanding.insert(QueueEntry::new((offset, SECRET)));
-        DropGuard::new(outstanding, |o| assert_drained(o, panic_with))
+        DropGuard::new(outstanding, |o| assert_drained(&o, panic_with))
     }
 
     /// Dropping a guard whose table still holds a write fails the check and
@@ -1049,16 +975,16 @@ mod test {
     fn drop_with_empty_table_passes() {
         drop(DropGuard::new(
             Outstanding::with_capacity(1),
-            |o: &Outstanding<'static>| assert_drained(o, panic_with),
+            |o: Outstanding<'static>| assert_drained(&o, panic_with),
         ));
     }
 
-    /// Forgetting a guard skips the check even while a write is outstanding
+    /// Dismissing a guard skips the check even while a write is outstanding
     /// and returns the table.
     #[test]
-    fn forget_skips_the_check() {
-        let outstanding = guard_with_entry(4096).forget();
-        assert_eq!(outstanding.len(), 1, "forget must return the table intact");
+    fn dismiss_skips_the_check() {
+        let outstanding = DropGuard::dismiss(guard_with_entry(4096));
+        assert_eq!(outstanding.len(), 1, "dismiss must return the table intact");
     }
 
     /// The failure message lists offsets and never includes buffer contents.
