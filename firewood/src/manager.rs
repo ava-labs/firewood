@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io;
+use std::mem::DropGuard;
 use std::num::NonZero;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -385,31 +386,10 @@ impl<H: HashMode> RevisionManager<H> {
         proposal: &ProposedRevision<H>,
         revisions: &mut VecDeque<CommittedRevision<H>>,
     ) -> Result<CommittedId, RevisionManagerError> {
-        struct RevisionsGuard<'a, H: HashMode> {
-            revisions: &'a mut VecDeque<CommittedRevision<H>>,
-        }
-
-        impl<H: HashMode> Drop for RevisionsGuard<'_, H> {
-            fn drop(&mut self) {
-                // update the active revisions gauge on any path that drops the guard
-                firewood_gauge!(ACTIVE_REVISIONS).set_integer(self.revisions.len());
-            }
-        }
-
-        impl<H: HashMode> std::ops::Deref for RevisionsGuard<'_, H> {
-            type Target = VecDeque<CommittedRevision<H>>;
-            fn deref(&self) -> &Self::Target {
-                self.revisions
-            }
-        }
-
-        impl<H: HashMode> std::ops::DerefMut for RevisionsGuard<'_, H> {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                self.revisions
-            }
-        }
-
-        let mut revisions = RevisionsGuard { revisions };
+        // update the active revisions gauge on any path that drops the guard
+        let mut revisions = DropGuard::new(revisions, |revisions| {
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
+        });
 
         // Check if the persist worker has failed.
         self.persist_worker
