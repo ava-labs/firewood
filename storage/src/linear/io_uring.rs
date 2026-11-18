@@ -91,10 +91,10 @@ struct WriteBatch<'batch, 'ring, I> {
     /// A btree of outstanding entries that have been submitted to the kernel
     /// but have not yet completed.
     ///
-    /// The drop guard ensures this table is empty when the batch is complete,
-    /// if we somehow return from `write_batch` with outstanding entries, that
-    /// will result in undefined behavior because the buffers may be dropped
-    /// while the kernel is still using them.
+    /// The drop guard ensures this table is empty when the batch is complete.
+    /// If we somehow return from `write_batch` with outstanding entries, the
+    /// buffers may be dropped while the kernel is still using them, which is
+    /// undefined behavior; the guard aborts the process instead.
     outstanding: self::drop_guard::DropGuard<Outstanding<'batch>>,
 
     /// A backlog of entries that were taken from the `entries` iterator but
@@ -186,7 +186,8 @@ impl IoUringProxy {
     ///
     /// If all writes succeed, the total number of bytes written is returned. If
     /// any writes fail, a collection of errors is returned. If an incurable
-    /// error occurs, it will be indicated in the returned errors.
+    /// error occurs, it will be indicated in the returned errors, unless writes
+    /// are still outstanding, in which case the process aborts.
     pub fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
         &self,
         fd: RawFd,
@@ -194,11 +195,17 @@ impl IoUringProxy {
     ) -> Result<usize, BatchErrors> {
         let mut errors = Vec::<BatchError>::new();
         macro_rules! bail {
-            ($reason:expr) => {{
+            ($batch:expr, $reason:expr) => {{
+                let err = $reason;
+                // The guard aborts the process when writes are outstanding and
+                // would otherwise discard the error that caused the exit.
+                if !$batch.outstanding.is_empty() {
+                    eprintln!("io-uring incurable error with outstanding writes: {err}");
+                }
                 errors.push(BatchError {
                     batch_offset: 0,
                     error_offset: 0,
-                    err: $reason,
+                    err,
                     incurable: true,
                 });
                 // guaranteed non-empty since we just pushed the incurable error
@@ -239,7 +246,7 @@ impl IoUringProxy {
             // Top of the loop: synchronize the completion queue pointers and
             // maybe block until at least one completion is available.
             if let Err(err) = batch.sync_completion_queue() {
-                bail!(err);
+                bail!(batch, err);
             }
 
             // Drain the completion queue and backlog any entries we need to
@@ -249,7 +256,7 @@ impl IoUringProxy {
             // Finally, try to flush more entries to the submission queue
             // prioritizing resubmits before new entries.
             if let Err(err) = batch.flush_submission_queue() {
-                bail!(err);
+                bail!(batch, err);
             }
         }
 
@@ -424,11 +431,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             submitter,
             sq,
             cq,
-            outstanding: self::drop_guard::DropGuard::new(
-                Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
-                Outstanding::is_empty,
-                "io-uring write batch terminated with outstanding entries",
-            ),
+            outstanding: outstanding_guard(),
             backlog: std::collections::VecDeque::new(),
             entries,
             written: 0,
@@ -722,9 +725,10 @@ mod errors {
         /// Incurable errors are those that prevent us from communicating with the
         /// kernel via io-uring and force us to abort the entire batch immediately.
         ///
-        /// The data is likely corrupted and should not be trusted. These errors
-        /// likely should abort the process instead of being handled gracefully;
-        /// however, we return them here so the abort can happen at a higher level.
+        /// The data is likely corrupted and should not be trusted. If writes
+        /// are still outstanding when one of these errors ends the batch, the
+        /// batch aborts the process before returning the error, because the
+        /// kernel still holds the write buffers.
         ///
         /// Curable errors are those that affect only a single write operation and
         /// may be recoverable, depending on the operation and context.
@@ -890,36 +894,75 @@ mod errors {
     }
 }
 
-/// The drop guard ensures a predicate is false when dropped.
+/// Builds the guard that enforces the batch never ends with outstanding writes.
+///
+/// The guard is forgotten on the normal exit path, so its check runs only when
+/// the batch exits early.
+fn outstanding_guard<'batch>() -> drop_guard::DropGuard<Outstanding<'batch>> {
+    drop_guard::DropGuard::new(
+        Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
+        |outstanding| assert_drained(outstanding, abort_with),
+    )
+}
+
+/// Calls `fail` if any write is still outstanding.
+///
+/// The kernel owns the buffers of outstanding writes until they complete, so
+/// releasing them early lets the kernel read freed memory and write it to the
+/// file. The message lists the offsets but never the buffer contents.
+fn assert_drained(outstanding: &Outstanding<'_>, fail: fn(&str) -> !) {
+    if outstanding.is_empty() {
+        return;
+    }
+
+    let offsets = outstanding
+        .btree
+        .iter()
+        .map(|entry| entry.original_offset.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    fail(&format!(
+        "io-uring write batch terminated with outstanding entries: outstanding={} offsets=[{offsets}]",
+        outstanding.len(),
+    ));
+}
+
+/// Aborts the process after writing `message` to stderr.
+///
+/// Unwinding is not an option: it frees the buffers the kernel still holds.
+/// The crate logger is a no-op without the `logger` feature, so the message
+/// goes to stderr directly.
+fn abort_with(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::abort()
+}
+
+/// The drop guard runs a check against its value when dropped.
 ///
 /// This is inside its own module to avoid accidentally exposing the inner
 /// `value`.
 mod drop_guard {
-    use std::fmt::Debug;
     use std::mem::ManuallyDrop;
     use std::ops::Deref;
     use std::ops::DerefMut;
 
-    pub(super) struct DropGuard<T: Debug, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
+    pub(super) struct DropGuard<T, F: FnOnce(&T) = fn(&T)> {
         value: ManuallyDrop<T>,
-        /// The predicate that must be false when dropped. If `true`, this indicates
-        /// a logic error in the code using the guard and will cause a panic. If
-        /// this happens during a panic unwind, the process will abort (which is
-        /// desirable to avoid further corruption).
-        predicate: ManuallyDrop<F>,
-        message: &'static str,
+        /// The check run against the value when the guard is dropped. It
+        /// enforces an invariant of the code using the guard and is expected to
+        /// diverge (abort or panic) when the invariant is violated.
+        check: ManuallyDrop<F>,
     }
 
-    impl<T: Debug, F: FnOnce(&T) -> bool> DropGuard<T, F> {
-        pub(super) const fn new(value: T, predicate: F, message: &'static str) -> Self {
+    impl<T, F: FnOnce(&T)> DropGuard<T, F> {
+        pub(super) const fn new(value: T, check: F) -> Self {
             Self {
                 value: ManuallyDrop::new(value),
-                predicate: ManuallyDrop::new(predicate),
-                message,
+                check: ManuallyDrop::new(check),
             }
         }
 
-        /// Forget the guard without evaluating the predicate; and return the
+        /// Forget the guard without running the check; and return the
         /// inner value.
         ///
         /// This must take ownership of `self` to ensure the guard is forgotten
@@ -928,33 +971,33 @@ mod drop_guard {
             let mut this = ManuallyDrop::new(self);
             #[expect(unsafe_code)]
             // SAFETY: we are forgetting the guard; therefore, we must drop the
-            // predicate and move the value without running the `Drop` handler
+            // check and move the value without running the `Drop` handler
             // on the guard. `ManuallyDrop(self)` ensures that.
             unsafe {
-                ManuallyDrop::drop(&mut this.predicate);
+                ManuallyDrop::drop(&mut this.check);
                 ManuallyDrop::take(&mut this.value)
             }
         }
     }
 
-    impl<T: Debug, F: FnOnce(&T) -> bool> Drop for DropGuard<T, F> {
+    impl<T, F: FnOnce(&T)> Drop for DropGuard<T, F> {
         fn drop(&mut self) {
             #[expect(unsafe_code)]
             // SAFETY: we are in the `Drop` handler; therefore, it is safe to
-            // take ownership of the predicate to call it. `Drop` ensures this
+            // take ownership of the check to call it. `Drop` ensures this
             // is only called once and the values within the manually dropped
             // are not used afterward.
-            let (value, predicate) = unsafe {
+            let (value, check) = unsafe {
                 (
                     ManuallyDrop::take(&mut self.value),
-                    ManuallyDrop::take(&mut self.predicate),
+                    ManuallyDrop::take(&mut self.check),
                 )
             };
-            assert!(!(predicate)(&value), "{value:?}: {}", self.message);
+            check(&value);
         }
     }
 
-    impl<T: Debug, F: FnOnce(&T) -> bool> Deref for DropGuard<T, F> {
+    impl<T, F: FnOnce(&T)> Deref for DropGuard<T, F> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
@@ -962,9 +1005,74 @@ mod drop_guard {
         }
     }
 
-    impl<T: Debug, F: FnOnce(&T) -> bool> DerefMut for DropGuard<T, F> {
+    impl<T, F: FnOnce(&T)> DerefMut for DropGuard<T, F> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.value
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::panic::AssertUnwindSafe;
+    use std::panic::catch_unwind;
+
+    use super::Outstanding;
+    use super::QueueEntry;
+    use super::assert_drained;
+    use super::drop_guard::DropGuard;
+
+    const SECRET: &[u8] = b"SECRET";
+
+    fn panic_with(message: &str) -> ! {
+        panic!("{message}")
+    }
+
+    fn guard_with_entry(
+        offset: u64,
+    ) -> DropGuard<Outstanding<'static>, impl FnOnce(&Outstanding<'static>)> {
+        let mut outstanding = Outstanding::with_capacity(1);
+        outstanding.insert(QueueEntry::new((offset, SECRET)));
+        DropGuard::new(outstanding, |o| assert_drained(o, panic_with))
+    }
+
+    /// Dropping a guard whose table still holds a write fails the check and
+    /// reports the entry count and offset.
+    #[test]
+    #[should_panic(expected = "outstanding=1 offsets=[4096]")]
+    fn drop_with_outstanding_entry_fails() {
+        drop(guard_with_entry(4096));
+    }
+
+    /// Dropping a guard over an empty table passes the check.
+    #[test]
+    fn drop_with_empty_table_passes() {
+        drop(DropGuard::new(
+            Outstanding::with_capacity(1),
+            |o: &Outstanding<'static>| assert_drained(o, panic_with),
+        ));
+    }
+
+    /// Forgetting a guard skips the check even while a write is outstanding
+    /// and returns the table.
+    #[test]
+    fn forget_skips_the_check() {
+        let outstanding = guard_with_entry(4096).forget();
+        assert_eq!(outstanding.len(), 1, "forget must return the table intact");
+    }
+
+    /// The failure message lists offsets and never includes buffer contents.
+    #[test]
+    fn failure_message_omits_buffer_contents() {
+        let payload = catch_unwind(AssertUnwindSafe(|| drop(guard_with_entry(4096))))
+            .expect_err("dropping a non-empty guard must fail the check");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("the failure payload is the formatted message");
+        let secret = String::from_utf8_lossy(SECRET);
+        assert!(
+            !message.contains(secret.as_ref()),
+            "message must not contain buffer contents: {message}"
+        );
     }
 }
