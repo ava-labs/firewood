@@ -134,6 +134,7 @@ fn bench_db<H: HashMode, const N: usize>(criterion: &mut Criterion) {
                     let db = open(db_path, H::ALGORITHM, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
+                    db.close().unwrap();
                 },
                 BatchSize::SmallInput,
             );
