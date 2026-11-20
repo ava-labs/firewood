@@ -296,8 +296,12 @@ impl HashMode for EthHash {
                     trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
                     buf.update(&final_bytes);
                     return;
-                } else {
+                } else if is_account {
                     RlpItem::Bytes(&updated_bytes)
+                } else {
+                    // A branch shorter than 32 bytes is embedded in the
+                    // extension as a list, as an inline child is in a branch.
+                    RlpItem::Raw(&updated_bytes)
                 };
                 let final_bytes = encode_list(&[RlpItem::Bytes(&path), value_item]);
                 trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));

@@ -82,6 +82,8 @@ impl Hasher for KeccakHasher {
 #[test_case([("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
 #[test_case([("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
 #[test_case([("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+#[test_case([([0x01u8], [0x01u8]), ([0x02], [0x02])]; "one nibble extension over an inline branch")]
+#[test_case([([0x00u8, 0x01], [0x01u8]), ([0x00, 0x02], [0x02])]; "three nibble extension over an inline branch")]
 fn test_root_hash_eth_compatible<I, K, V>(kvs: I)
 where
     I: Clone + IntoIterator<Item = (K, V)>,
