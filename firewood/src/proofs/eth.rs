@@ -140,7 +140,9 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
         branch_bytes
     };
 
-    if partial_path.is_empty() {
+    // An account is a leaf of the state trie even when its partial path is
+    // empty, so only a branch that holds no account is emitted bare.
+    if partial_path.is_empty() && !(is_account && value_bytes.is_some()) {
         return smallvec![inner_bytes];
     }
 

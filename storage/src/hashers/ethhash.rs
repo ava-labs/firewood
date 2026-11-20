@@ -280,7 +280,12 @@ impl HashMode for EthHash {
             };
 
             let partial_path = node.partial_path();
-            if partial_path.is_empty() {
+            // The state trie stores every account as a leaf, so an account
+            // with an empty partial path still takes the leaf encoding below,
+            // whose compact path is 0x20.
+            let has_account_value =
+                is_account && matches!(node.value_digest(), Some(ValueDigest::Value(_)));
+            if partial_path.is_empty() && !has_account_value {
                 trace!("pass 2=bytes {:02X?}", hex::encode(&updated_bytes));
                 buf.update(&updated_bytes);
             } else {

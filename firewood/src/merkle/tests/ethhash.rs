@@ -514,6 +514,55 @@ fn test_short_storage_keys_hash_like_ethereum(storage_entries: &[(&[u8], &[u8])]
     }
 }
 
+/// Two account keys that differ only in their last nibble put both accounts
+/// directly under a branch, with empty partial paths. Ethereum still stores
+/// each account as a leaf whose compact path is `0x20`, whether or not the
+/// account has storage. Keys that differ one nibble earlier leave each account
+/// a one nibble partial path.
+#[test_case(0x11; "accounts split on the last nibble")]
+#[test_case(0x20; "accounts split on the second to last nibble")]
+fn test_account_with_storage_under_a_branch_hashes_like_ethereum(other_last_byte: u8) {
+    let with_storage = [0x10u8; 32];
+    let mut without_storage = [0x10u8; 32];
+    without_storage[31] = other_last_byte;
+
+    let slot = [0x01u8; 32];
+    let slot_value = rlp_encode_storage(&[0x02; 32]);
+    let storage_root =
+        KeccakHasher::trie_root([(slot.as_slice(), slot_value.as_slice())]).to_fixed_bytes();
+
+    let dummy_storage_root = [0u8; 32];
+    let merkle = init_merkle([
+        (
+            with_storage.to_vec(),
+            rlp_encode_account(1, 10, &dummy_storage_root, &empty_code_hash()).to_vec(),
+        ),
+        ([with_storage, slot].concat(), slot_value.clone()),
+        (
+            without_storage.to_vec(),
+            rlp_encode_account(2, 20, &dummy_storage_root, &empty_code_hash()).to_vec(),
+        ),
+    ]);
+    let root_hash = merkle
+        .nodestore()
+        .root_hash()
+        .expect("the trie holds two accounts");
+
+    let eth_root: TrieHash = KeccakHasher::trie_root([
+        (
+            with_storage,
+            rlp_encode_account(1, 10, &storage_root, &empty_code_hash()),
+        ),
+        (
+            without_storage,
+            rlp_encode_account(2, 20, &empty_trie_root(), &empty_code_hash()),
+        ),
+    ])
+    .to_fixed_bytes()
+    .into();
+    assert_eq!(root_hash, eth_root);
+}
+
 /// A branch account (two storage entries) should have its storageRoot set to
 /// the hash of the two-node storage sub-trie.
 #[test]
