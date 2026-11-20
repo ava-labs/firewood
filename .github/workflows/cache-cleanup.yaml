@@ -4,12 +4,19 @@ on:
     types:
       - closed
 
+permissions: {}
+
 jobs:
   cleanup:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Cleanup
         run: |

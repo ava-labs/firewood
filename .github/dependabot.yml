@@ -12,6 +12,8 @@ updates:
       time: "05:00"
       timezone: "America/Los_Angeles"
     open-pull-requests-limit: 0 # Disable non-security version updates
+    cooldown:
+      default-days: 7
   - package-ecosystem: github-actions
     # "/" covers .github/workflows only; composite actions need their own entry.
     directories:
@@ -32,3 +34,5 @@ updates:
         patterns:
           - "*"
     open-pull-requests-limit: 0 # Disable non-security version updates
+    cooldown:
+      default-days: 7

@@ -11,6 +11,8 @@ env:
   # "Toolchain Selection".
   RUSTUP_TOOLCHAIN: stable
 
+permissions: {}
+
 jobs:
   publish-firewood-crate:
     name: firewood-lib

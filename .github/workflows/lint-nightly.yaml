@@ -6,8 +6,12 @@ on:
     # rust-toolchain.toml).
     - cron: "0 6 * * 1"
   workflow_dispatch:
+permissions: {}
+
 jobs:
   rust-lint:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:

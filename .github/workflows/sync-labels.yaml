@@ -16,14 +16,17 @@ on:
         type: boolean
         default: true
 
-permissions:
-  issues: write
+permissions: {}
 
 jobs:
   sync:
+    permissions:
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Sync labels from manifest
         uses: EndBug/label-sync@52074158190acb45f3077f9099fea818aa43f97a # v2.3.3
         with:

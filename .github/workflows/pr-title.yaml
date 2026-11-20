@@ -1,8 +1,7 @@
 # Check that the PR title matches the conventional commit format
 name: pr-title
 
-permissions:
-  pull-requests: write
+permissions: {}
 
 on:
   pull_request:
