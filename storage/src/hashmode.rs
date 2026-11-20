@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn eth_child_hash_codec_round_trips_inline_rlp() {
-        let rlp = HashType::Rlp(smallvec::SmallVec::from_slice(&[0xAA, 0xBB, 0xCC]));
+        let rlp = HashType::Rlp(crate::InlineRlp::new(&[0xAA, 0xBB, 0xCC]).unwrap());
         let mut buf = Vec::new();
         EthHash::write_child_hash(&rlp, &mut buf).unwrap();
         // Frozen eth layout: leading length byte + the RLP bytes.
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn merkledb_child_hash_write_rejects_inline_rlp() {
-        let rlp = HashType::Rlp(smallvec::SmallVec::from_slice(&[0xAA, 0xBB]));
+        let rlp = HashType::Rlp(crate::InlineRlp::new(&[0xAA, 0xBB]).unwrap());
         let mut buf = Vec::new();
         assert!(MerkleDbHash::write_child_hash(&rlp, &mut buf).is_err());
     }

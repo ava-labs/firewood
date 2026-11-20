@@ -41,13 +41,7 @@ fn test_crafted_omitted_change_detected<H: HashMode>() {
         setup_2nd_commit!(source, [(b"\x20", b"changed1"), (b"\x30", b"changed2")]);
 
     let valid = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x10"),
-            Some(b"\x40"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x10"), Some(b"\x40"), None)
         .unwrap();
 
     let mut shortened: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -85,7 +79,7 @@ fn test_crafted_forged_value_detected<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"real")]);
 
     let valid = source
-        .change_proof(root1_source, root2.clone(), None, None, None)
+        .change_proof(root1_source, root2, None, None, None)
         .unwrap();
 
     let mut forged_ops: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -118,7 +112,7 @@ fn test_crafted_spurious_batch_op_detected<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xa0", b"changed")]);
 
     let valid = source
-        .change_proof(root1_source, root2.clone(), None, None, None)
+        .change_proof(root1_source, root2, None, None, None)
         .unwrap();
 
     let mut ops: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -161,7 +155,7 @@ fn test_crafted_spurious_put_at_start_key_boundary<H: HashMode>() {
     let honest = source
         .change_proof(
             root1_source,
-            root2.clone(),
+            root2,
             Some(b"\x10".as_ref()),
             Some(b"\x90".as_ref()),
             None,
@@ -215,7 +209,7 @@ fn test_crafted_spurious_delete_at_start_key_boundary<H: HashMode>() {
     let honest = source
         .change_proof(
             root1_source,
-            root2.clone(),
+            root2,
             Some(b"\x20".as_ref()),
             Some(b"\x90".as_ref()),
             None,
@@ -266,13 +260,7 @@ fn test_crafted_spurious_put_at_end_key_boundary<H: HashMode>() {
 
     // end_key \xb0 doesn't exist — exclusion end proof.
     let honest = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x20"),
-            Some(b"\xb0"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x20"), Some(b"\xb0"), None)
         .unwrap();
 
     // Inject Put at \xb0 (end_key). end proof is exclusion but Put expects inclusion.
@@ -292,7 +280,7 @@ fn test_crafted_spurious_put_at_end_key_boundary<H: HashMode>() {
 
     let err = verify_change_proof_structure(
         &crafted,
-        root2.clone(),
+        root2,
         Some(b"\x20"),
         Some(b"\xb0"),
         H::ALGORITHM,
@@ -319,13 +307,7 @@ fn test_crafted_spurious_delete_at_end_key_boundary<H: HashMode>() {
 
     // end_key \x90 EXISTS — inclusion end proof.
     let honest = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x20"),
-            Some(b"\x90"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x20"), Some(b"\x90"), None)
         .unwrap();
 
     // Inject Delete at \x90 (end_key). end proof is inclusion but Delete expects exclusion.
@@ -344,7 +326,7 @@ fn test_crafted_spurious_delete_at_end_key_boundary<H: HashMode>() {
 
     let err = verify_change_proof_structure(
         &crafted,
-        root2.clone(),
+        root2,
         Some(b"\x20"),
         Some(b"\x90"),
         H::ALGORITHM,
@@ -370,20 +352,14 @@ fn test_crafted_tampered_start_key_value_detected<H: HashMode>() {
         setup_2nd_commit!(source, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
 
     let honest = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10"), None, None)
         .unwrap();
 
     // Verify the honest proof works.
-    let ctx = verify_change_proof_structure(
-        &honest,
-        root2.clone(),
-        Some(b"\x10"),
-        None,
-        H::ALGORITHM,
-        None,
-    )
-    .unwrap();
-    verify_and_check(&target, &honest, &ctx, root1_target.clone()).unwrap();
+    let ctx =
+        verify_change_proof_structure(&honest, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+            .unwrap();
+    verify_and_check(&target, &honest, &ctx, root1_target).unwrap();
 
     // Tamper: replace Put(\x10, "changed") with Put(\x10, "WRONG").
     let mut tampered_ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
@@ -435,13 +411,7 @@ fn test_crafted_conflicting_proof_nodes_rejected<H: HashMode>() {
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"A"), (b"\x20", b"B")]);
 
     let valid = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(b"\x10"),
-            Some(b"\x20"),
-            None,
-        )
+        .change_proof(root1, root2, Some(b"\x10"), Some(b"\x20"), None)
         .unwrap();
 
     // Modify a child hash in the end proof's root node so it differs from
@@ -456,7 +426,7 @@ fn test_crafted_conflicting_proof_nodes_rejected<H: HashMode>() {
         .next()
         .map(|(_, h)| h)
         .expect("root node should have at least one child hash");
-    let bytes: [u8; 32] = child_hash.clone().into_triehash().into();
+    let bytes: [u8; 32] = (*child_hash).into_triehash().into();
     let mut new_bytes = bytes;
     new_bytes[0] ^= 1;
     *child_hash = firewood_storage::TrieHash::from(new_bytes).into();
@@ -501,7 +471,7 @@ fn test_crafted_value_at_odd_nibble_length_rejected<H: HashMode>() {
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x30", b"changed")]);
 
     let valid = db
-        .change_proof(root1.clone(), root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1, root2, Some(b"\x10"), None, None)
         .unwrap();
 
     // Find a start proof node at odd nibble depth and inject a value.
@@ -551,7 +521,7 @@ fn test_crafted_divergence_at_depth_zero<H: HashMode>() {
         (b"\xa0", b"v2"),
         (b"\xa1", b"v3")
     ];
-    let root1_source = root1_target.clone();
+    let root1_source = root1_target;
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
         BatchOp::Put {
@@ -567,22 +537,10 @@ fn test_crafted_divergence_at_depth_zero<H: HashMode>() {
     let root2 = source.root_hash().unwrap();
 
     let left = source
-        .change_proof(
-            root1_source.clone(),
-            root2.clone(),
-            Some(b"\x10"),
-            Some(b"\x11"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x10"), Some(b"\x11"), None)
         .unwrap();
     let right = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\xa0"),
-            Some(b"\xa1"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\xa0"), Some(b"\xa1"), None)
         .unwrap();
 
     // Skip shared root to create divergence at position 0
@@ -639,7 +597,7 @@ fn test_crafted_stripped_divergent_child_rejected<H: HashMode>() {
         (b"\x10\x5f", b"d"),
         (b"\x30\x00", b"c")
     ];
-    let root1_source = root1_target.clone();
+    let root1_source = root1_target;
 
     source
         .propose(vec![
@@ -659,7 +617,7 @@ fn test_crafted_stripped_divergent_child_rejected<H: HashMode>() {
     let valid = source
         .change_proof(
             root1_source,
-            root2.clone(),
+            root2,
             Some(b"\x10\x50"),
             Some(b"\x30\x00"),
             None,
@@ -669,14 +627,14 @@ fn test_crafted_stripped_divergent_child_rejected<H: HashMode>() {
     // Valid proof should pass.
     let ctx = verify_change_proof_structure(
         &valid,
-        root2.clone(),
+        root2,
         Some(b"\x10\x50"),
         Some(b"\x30\x00"),
         H::ALGORITHM,
         None,
     )
     .unwrap();
-    verify_and_check(&target, &valid, &ctx, root1_target.clone()).unwrap();
+    verify_and_check(&target, &valid, &ctx, root1_target).unwrap();
 
     // Find the proof node at [1, 0, 5] and strip the divergent child's
     // hash (nibble 8, leading to \x10\x58).
@@ -743,7 +701,7 @@ fn test_crafted_omitted_delete_at_straddling_nibble<H: HashMode>() {
 
     // Generate the honest proof (start_key=\x01: \x00 delete is out of range)
     let honest = db
-        .change_proof(root1.clone(), root2.clone(), Some(b"\x01"), None, None)
+        .change_proof(root1, root2, Some(b"\x01"), None, None)
         .unwrap();
 
     // The honest proof should have Delete(\x05) and Put(\x10, "changed")
@@ -779,9 +737,7 @@ fn test_collapse_root_hides_spurious_key<H: HashMode>() {
     let (db, _dir) = setup_db![mode = H; (b"\x90", b"orig")];
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x90", b"new!")]);
 
-    let valid_proof = db
-        .change_proof(root1.clone(), root2.clone(), None, None, None)
-        .unwrap();
+    let valid_proof = db.change_proof(root1, root2, None, None, None).unwrap();
 
     assert_eq!(valid_proof.batch_ops().len(), 1);
 
@@ -896,23 +852,17 @@ fn test_spurious_delete_in_range_is_rejected<H: HashMode>() {
 
     let (start_key, end_key) = gap_boundaries();
     let valid_proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(&start_key),
-            Some(&end_key),
-            None,
-        )
+        .change_proof(root1, root2, Some(&start_key), Some(&end_key), None)
         .unwrap();
 
     assert!(
         !is_rejected(
             &db,
             &valid_proof,
-            root2.clone(),
+            root2,
             Some(&start_key),
             Some(&end_key),
-            root1.clone(),
+            root1,
         ),
         "valid proof should pass"
     );
@@ -953,13 +903,7 @@ fn test_spurious_delete_same_subtree_as_changed_key<H: HashMode>() {
 
     let (start_key, end_key) = gap_boundaries();
     let valid_proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(&start_key),
-            Some(&end_key),
-            None,
-        )
+        .change_proof(root1, root2, Some(&start_key), Some(&end_key), None)
         .unwrap();
 
     inject_and_assert_rejected(
@@ -992,23 +936,17 @@ fn test_spurious_delete_with_existing_boundaries<H: HashMode>() {
     let (root1, root2) = setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20])]);
 
     let valid_proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(&keys[0]),
-            Some(&keys[4]),
-            None,
-        )
+        .change_proof(root1, root2, Some(&keys[0]), Some(&keys[4]), None)
         .unwrap();
 
     assert!(
         !is_rejected(
             &db,
             &valid_proof,
-            root2.clone(),
+            root2,
             Some(&keys[0]),
             Some(&keys[4]),
-            root1.clone(),
+            root1,
         ),
         "valid proof should pass"
     );
@@ -1048,13 +986,7 @@ fn test_swapped_value_in_range_is_rejected<H: HashMode>() {
 
     let (start_key, end_key) = gap_boundaries();
     let valid_proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(&start_key),
-            Some(&end_key),
-            None,
-        )
+        .change_proof(root1, root2, Some(&start_key), Some(&end_key), None)
         .unwrap();
 
     assert!(
@@ -1120,7 +1052,7 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
     );
 
     let valid = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x12\x30"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x12\x30"), None, None)
         .unwrap();
 
     // Serialize so 0x1234's boundary node carries a Hash digest (value >= 32 bytes).
@@ -1182,7 +1114,7 @@ fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
     );
 
     let valid = source
-        .change_proof(root1_source, root2.clone(), None, Some(b"\x12\x38"), None)
+        .change_proof(root1_source, root2, None, Some(b"\x12\x38"), None)
         .unwrap();
 
     // Serialize so 0x1234's boundary node carries a Hash digest (value >= 32 bytes).
@@ -1240,13 +1172,7 @@ fn test_spurious_put_in_range_is_rejected<H: HashMode>() {
 
     let (start_key, end_key) = gap_boundaries();
     let valid_proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(&start_key),
-            Some(&end_key),
-            None,
-        )
+        .change_proof(root1, root2, Some(&start_key), Some(&end_key), None)
         .unwrap();
 
     let mut fake_key = [0u8; 32];

@@ -103,10 +103,7 @@ fn child_at(nibble: u8) -> impl Fn(PathComponent) -> Option<Child> {
     let hash: crate::HashType = TrieHash::from([0u8; 32]).into();
     move |i| {
         if i.as_u8() == nibble {
-            Some(Child::AddressWithHash(
-                LinearAddress::new(1).unwrap(),
-                hash.clone(),
-            ))
+            Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), hash))
         } else {
             None
         }
@@ -189,7 +186,7 @@ fn branch<H: HashMode>(name: &str, path: Vec<u8>, value: Option<Vec<u8>>, child:
 /// is a single-byte RLP payload `0xC0` (empty RLP list): length byte `0x01`
 /// followed by `0xC0`.
 #[test_case("keccak_hash", crate::HashType::Hash(TrieHash::from([0u8; 32])) ; "keccak_hash")]
-#[test_case("rlp_bytes", crate::HashType::Rlp(smallvec::SmallVec::from_slice(&[0xC0u8])) ; "rlp_bytes")]
+#[test_case("rlp_bytes", crate::HashType::Rlp(crate::InlineRlp::new(&[0xC0u8]).unwrap()) ; "rlp_bytes")]
 fn hash_or_rlp(name: &str, h: crate::HashType) {
     insta::assert_snapshot!(name, hex::encode(write_to_vec(&h)));
 }

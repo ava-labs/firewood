@@ -917,6 +917,34 @@ fn test_invalid_hash_type_discriminant() {
     }
 }
 
+#[test]
+fn test_inline_rlp_length_out_of_range() {
+    let node = make_proof_node(&[1], 0, None, &[7]);
+    let (_, data) = make_range_proof_from_single_node::<EthHash>(node);
+    // The child at nibble 7 is written as discriminant 0 at offset 39 and a
+    // 32-byte hash. Rewrite it as an inline RLP of `len` bytes.
+    for len in [0u8, 32] {
+        let mut data = data.clone();
+        data[39] = 1;
+        data.insert(40, len);
+        match compress_and_parse_range(&data) {
+            Err(ReadError::InvalidItem {
+                item,
+                expected,
+                found,
+                ..
+            }) => {
+                assert_eq!(item, "inline rlp length");
+                assert_eq!(expected, "1 to 31 bytes");
+                assert_eq!(found, format!("{len} bytes"));
+            }
+            other => {
+                panic!("Expected InvalidItem {{ item: \"inline rlp length\" }}, got: {other:?}")
+            }
+        }
+    }
+}
+
 #[hash_mode]
 #[test]
 fn test_change_proof_incomplete_batch_op_discriminant<H: HashMode>() {
