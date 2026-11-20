@@ -69,6 +69,7 @@ use crate::LinearAddress;
 use crate::MerkleDbHash;
 use crate::NibblesIterator;
 use crate::NodeHashAlgorithm;
+use crate::PackedChildren;
 use crate::Path;
 use crate::PathComponent;
 use crate::TrieHash;
@@ -173,7 +174,7 @@ fn branch<H: HashMode>(name: &str, path: Vec<u8>, value: Option<Vec<u8>>, child:
     let node = Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(path),
         value: value.map(Into::into),
-        children: Children::from_fn(child_at(child)),
+        children: PackedChildren::from(Children::from_fn(child_at(child))),
     }));
     let mut buf = Vec::new();
     node.as_bytes::<H, _>(&mut buf).unwrap();
