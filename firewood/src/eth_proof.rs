@@ -757,6 +757,45 @@ mod tests {
         assert_eq!(parsed.nonce, 11);
     }
 
+    /// Two account keys that differ only in their last nibble leave each
+    /// account directly under a branch with an empty partial path. The
+    /// account with storage must still prove as the two item leaf
+    /// `[0x20, account RLP]` that an Ethereum verifier expects.
+    #[test]
+    fn account_with_storage_under_a_branch_proves_as_a_leaf() {
+        let acc1 = [0x10u8; 32];
+        let mut acc2 = [0x10u8; 32];
+        acc2[31] = 0x11;
+        let slot = [0xaau8; 32];
+        let v1 = account_rlp(11, &[]);
+        let v2 = account_rlp(22, &[]);
+        let merkle = init_merkle([
+            (acc1.to_vec(), v1.to_vec()),
+            ([acc1, slot].concat(), b"stored-value".to_vec()),
+            (acc2.to_vec(), v2.to_vec()),
+        ]);
+        let root: [u8; 32] = merkle
+            .nodestore()
+            .root_hash()
+            .unwrap()
+            .as_ref()
+            .try_into()
+            .unwrap();
+
+        let proof = eth_get_proof(merkle.nodestore(), &acc1, &[slot]).unwrap();
+        let last = RlpList::parse(proof.account_proof.last().unwrap()).unwrap();
+        let last_fields = last.fields().unwrap();
+        assert_eq!(last_fields.len(), 2, "the account node is a leaf");
+        assert_eq!(last_fields[0], [0x20], "an empty leaf path encodes as 0x20");
+
+        let recovered =
+            mpt_proof_value(&proof.account_proof, &root, &acc1).expect("acc1 should be present");
+        let parsed = AccountFields::from_rlp(&recovered).unwrap();
+        assert_eq!(parsed.nonce, 11);
+        assert_eq!(parsed.storage_root, proof.storage_hash);
+        assert_storage_entry_verifies(&proof.storage_proofs[0], &proof.storage_hash);
+    }
+
     #[test]
     fn present_account_two_slots_multi_child_proof() {
         let account_key = [0x44u8; 32];
