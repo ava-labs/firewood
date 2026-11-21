@@ -57,6 +57,7 @@
 //! ```
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathBuf;
@@ -129,6 +130,55 @@ impl RangeProofVerificationContext {
     #[must_use]
     pub fn right_edge_key(&self) -> Option<&[u8]> {
         self.right_edge_key.as_deref()
+    }
+}
+
+/// A range proof together with the verification context produced from it,
+/// built only by [`VerifiedRangeProof::verify`].
+///
+/// See [`VerifiedChangeProof`](super::VerifiedChangeProof) for the
+/// pairing guarantee, the [`Arc`] sharing, and why the type is not `Clone`.
+#[derive(Debug)]
+pub struct VerifiedRangeProof {
+    proof: Arc<FrozenRangeProof>,
+    verification: RangeProofVerificationContext,
+}
+
+impl VerifiedRangeProof {
+    /// Verify `proof` with [`verify_range_proof_structure`], whose parameters
+    /// this takes unchanged, and pair it with the resulting context. `proof`
+    /// may be owned or already shared.
+    ///
+    /// # Errors
+    ///
+    /// Any error [`verify_range_proof_structure`] returns.
+    pub fn verify(
+        proof: impl Into<Arc<FrozenRangeProof>>,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        algorithm: NodeHashAlgorithm,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Self, api::Error> {
+        let proof = proof.into();
+        let verification =
+            verify_range_proof_structure(&proof, root, start_key, end_key, algorithm, max_length)?;
+        Ok(Self {
+            proof,
+            verification,
+        })
+    }
+
+    /// The verified proof.
+    #[must_use]
+    pub const fn proof(&self) -> &Arc<FrozenRangeProof> {
+        &self.proof
+    }
+
+    /// The parameters the proof was verified with and the range it proves.
+    #[must_use]
+    pub const fn verification(&self) -> &RangeProofVerificationContext {
+        &self.verification
     }
 }
 

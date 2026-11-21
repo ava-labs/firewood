@@ -185,6 +185,8 @@ pub use proofs::ProofType;
 pub use proofs::RangeProof;
 pub use proofs::RangeProofVerificationContext;
 pub use proofs::ReadError;
+pub use proofs::VerifiedChangeProof;
+pub use proofs::VerifiedRangeProof;
 pub use proofs::find_next_key_after_change_proof;
 pub use proofs::find_next_key_after_range_proof;
 pub use proofs::verify_change_proof_structure;
