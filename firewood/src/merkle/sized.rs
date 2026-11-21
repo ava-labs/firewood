@@ -460,12 +460,12 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
     type Proof = FrozenRangeProof;
     const KIND: ProofType = ProofType::Range;
 
-    fn item_cost((key, value): &Self::Item) -> usize {
-        encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
+    fn item_cost(item: &Self::Item) -> usize {
+        key_value_encoded_len(item)
     }
 
     /// At the natural end the right edge stays open, as
-    /// [`Merkle::range_proof`] leaves it when its limit is not hit.
+    /// [`Merkle::range_proof`] leaves it when it collects every key in the range.
     fn build(&self, kvs: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error> {
         let end = match kvs.last() {
             Some((last, _)) if !natural_end => self.merkle.prove(last)?,
@@ -503,13 +503,8 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
     type Proof = FrozenChangeProof;
     const KIND: ProofType = ProofType::Change;
 
-    /// One tag byte and the key, plus the value of a `Put`.
     fn item_cost(op: &Self::Item) -> usize {
-        let tag_and_key = encoded_sequence_len(op.key()).saturating_add(1);
-        match op {
-            BatchOp::Put { value, .. } => tag_and_key.saturating_add(encoded_sequence_len(value)),
-            BatchOp::Delete { .. } | BatchOp::DeleteRange { .. } => tag_and_key,
-        }
+        batch_op_encoded_len(op)
     }
 
     /// The right edge is always the last operation's key, as
@@ -598,8 +593,27 @@ fn edge_bytes(body_len: usize, costs: &[usize], count: usize) -> usize {
     )
 }
 
+/// Bytes that `bytes` takes in a proof body: its varint length prefix, then
+/// the bytes.
 fn encoded_sequence_len(bytes: &[u8]) -> usize {
     bytes.len().required_space().saturating_add(bytes.len())
+}
+
+/// Bytes a key-value pair takes in a range proof body: the key, then the
+/// value, each with its length prefix.
+pub(super) fn key_value_encoded_len((key, value): &(Key, Value)) -> usize {
+    encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
+}
+
+/// Bytes a batch operation takes in a change proof body: one tag byte and the
+/// key, plus the value of a `Put`. The key and value each carry a length
+/// prefix.
+pub(super) fn batch_op_encoded_len(op: &BatchOp<Key, Value>) -> usize {
+    let tag_and_key = encoded_sequence_len(op.key()).saturating_add(1);
+    match op {
+        BatchOp::Put { value, .. } => tag_and_key.saturating_add(encoded_sequence_len(value)),
+        BatchOp::Delete { .. } | BatchOp::DeleteRange { .. } => tag_and_key,
+    }
 }
 
 fn percent_of(bytes: usize, percent: usize) -> usize {

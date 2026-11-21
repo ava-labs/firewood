@@ -925,7 +925,8 @@ fn test_slow_ethhash_proof_fuzz() {
 
             // Truncated change proofs: the generator stops at the limit, so
             // the proven range may narrow to the last op. The proofs above pass
-            // no limit, so they never reach that narrowing.
+            // no limit and stay far below `PROOF_GENERATION_BUDGET`, so they
+            // never reach that narrowing.
             check_truncated_change_proof(db, start_root, end_root, first, last, &rng, &locator);
 
             // Negative: every tamper of the valid change proof must be rejected.

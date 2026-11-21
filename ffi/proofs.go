@@ -111,9 +111,11 @@ type codeIterator struct {
 
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
 // included in the tree with the current root. The proof may be truncated to at
-// most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
-// Nothing, the range is unbounded in that direction. If [rootHash] is Nothing, the
-// current root of the database is used.
+// most [maxLength] entries, if non-zero. Whatever [maxLength] is, generation also
+// stops at firewood's byte budget (api::PROOF_GENERATION_BUDGET in the Rust
+// crate). If either [startKey] or [endKey] is Nothing, the range is unbounded in
+// that direction. If [rootHash] is Nothing, the current root of the database is
+// used.
 func (db *Database) RangeProof(
 	rootHash Hash,
 	startKey, endKey Maybe[[]byte],
@@ -228,7 +230,7 @@ func (db *Database) VerifyRangeProof(
 // in the range [startKey, endKey] are included in the tree with the given
 // [rootHash]. If the proof is valid, it is committed to the database and the
 // new root hash is returned. The resulting root hash may not equal the
-// provided root hash if the proof was truncated due to [maxLength].
+// provided root hash if the proof was truncated.
 //
 // The commit replaces state across the proven range on the same terms as
 // [*Database.VerifyRangeProof].
@@ -400,8 +402,10 @@ func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
 
 // ChangeProof returns a proof that the changes between [startRoot] and
 // [endRoot] for keys in the range [startKey, endKey]. The proof may be
-// truncated to at most [maxLength] entries, if non-zero. If either [startKey] or
-// [endKey] is Nothing, the range is unbounded in that direction.
+// truncated to at most [maxLength] entries, if non-zero. Whatever [maxLength] is,
+// generation also stops at firewood's byte budget (api::PROOF_GENERATION_BUDGET
+// in the Rust crate). If either [startKey] or [endKey] is Nothing, the range is
+// unbounded in that direction.
 func (db *Database) ChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],

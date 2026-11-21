@@ -38,12 +38,15 @@ pub struct CreateChangeProofArgs<'a> {
     /// starts from the beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to create the proof for. If `None`, the range
-    /// ends at the end of the keyspace or until `max_length` items have been
-    /// included in the proof.
+    /// ends at the end of the keyspace or where the proof stops early (see
+    /// `max_length`).
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs to include in the proof. If the
     /// range contains more items than this, the proof will be truncated. If
-    /// `0`, there is no limit.
+    /// `0`, there is no count limit.
+    ///
+    /// Whatever `max_length` is, generation also stops at
+    /// [`firewood::api::PROOF_GENERATION_BUDGET`].
     pub max_length: u32,
 }
 
