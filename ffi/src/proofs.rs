@@ -4,6 +4,7 @@
 mod change;
 mod code_hash;
 mod eth;
+mod proposal_state;
 mod range;
 
 // Re-export firewood-side types that used to be defined in this crate, so
