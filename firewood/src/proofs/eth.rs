@@ -163,9 +163,9 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
         out.push(inner_bytes);
         out
     } else {
-        // Inline form: the inner bytes fit (or this is an account, which
-        // the Ethereum hasher always inlines). Mirroring the hasher here:
-        // see ethhash.rs:309-320. An account's RLP is the leaf value and is
+        // Inline form. The inner bytes fit, or this is an account, which the
+        // Ethereum hasher always inlines. This mirrors the extension arm of
+        // `EthHash::write_preimage`. An account's RLP is the leaf value and is
         // encoded as a byte string, and a short branch is embedded as a list.
         let inner_item = if is_account {
             RlpItem::Bytes(&inner_bytes)
