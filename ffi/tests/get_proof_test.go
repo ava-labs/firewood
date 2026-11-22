@@ -230,6 +230,7 @@ func TestEthGetProofAbsentAccountsReportDefaultFields(t *testing.T) {
 				r.NoError(err)
 				r.Nil(verifyProof(t, root, absentHash[:], proof.AccountProof), "address %d", i)
 				r.Equal(uint64(0), proof.Nonce, "address %d", i)
+				r.Equal([32]byte{}, proof.Balance, "address %d", i)
 				r.Equal(types.EmptyRootHash, common.Hash(proof.StorageHash), "address %d", i)
 				r.Equal(types.EmptyCodeHash, common.Hash(proof.CodeHash), "address %d", i)
 			}
