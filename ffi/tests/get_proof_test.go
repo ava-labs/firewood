@@ -206,6 +206,37 @@ func TestEthGetProofAccountInclusionAndExclusion(t *testing.T) {
 	}
 }
 
+// The walk to an absent account ends at another account's leaf whenever the
+// two hashed keys share a prefix that no branch splits. With sixteen accounts
+// in the trie that happens for many absent addresses, and every one of them
+// must still report the default account shape.
+func TestEthGetProofAbsentAccountsReportDefaultFields(t *testing.T) {
+	specs := make([]accountSpec, 0, 16)
+	for i := uint64(1); i <= 16; i++ {
+		specs = append(specs, accountSpec{addr: common.BytesToAddress(binary.BigEndian.AppendUint64(nil, i))})
+	}
+	built := buildState(t, specs)
+	root := common.Hash(built.root)
+
+	for _, prover := range proversAtRoot(t, built) {
+		t.Run(fmt.Sprintf("%T", prover), func(t *testing.T) {
+			r := require.New(t)
+
+			for i := uint64(1000); i < 1064; i++ {
+				absent := common.BytesToAddress(binary.BigEndian.AppendUint64(nil, i))
+				absentHash := crypto.Keccak256Hash(absent[:])
+
+				proof, err := prover.EthGetProof(absentHash[:], nil)
+				r.NoError(err)
+				r.Nil(verifyProof(t, root, absentHash[:], proof.AccountProof), "address %d", i)
+				r.Equal(uint64(0), proof.Nonce, "address %d", i)
+				r.Equal(types.EmptyRootHash, common.Hash(proof.StorageHash), "address %d", i)
+				r.Equal(types.EmptyCodeHash, common.Hash(proof.CodeHash), "address %d", i)
+			}
+		})
+	}
+}
+
 func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
 	addr := common.HexToAddress("0x00000000000000000000000000000000000000c3")
 	slots := []slot{
