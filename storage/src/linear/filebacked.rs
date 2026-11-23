@@ -22,6 +22,7 @@
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
+use std::mem::DropGuard;
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
@@ -170,7 +171,7 @@ impl FileBacked {
             filename: path,
             #[cfg(io_uring)]
             ring,
-            fd: UnlockOnDrop(fd),
+            fd: DropGuard::new(fd, unlock),
         })
     }
 
@@ -389,28 +390,12 @@ impl OffsetReader for PredictiveReader<'_> {
     }
 }
 
-#[derive(Debug)]
-struct UnlockOnDrop(File);
+/// A file handle that releases its advisory lock when dropped.
+type UnlockOnDrop = DropGuard<File, fn(File)>;
 
-impl Drop for UnlockOnDrop {
-    fn drop(&mut self) {
-        // ignore the error, we might not have ever called `lock`
-        _ = self.0.unlock();
-    }
-}
-
-impl std::ops::Deref for UnlockOnDrop {
-    type Target = File;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for UnlockOnDrop {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+fn unlock(file: File) {
+    // ignore the error, we might not have ever called `lock`
+    _ = file.unlock();
 }
 
 #[cfg(test)]
