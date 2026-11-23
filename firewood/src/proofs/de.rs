@@ -31,6 +31,7 @@ use super::types::ProofType;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
 use crate::api::MAX_KEY_BYTES;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::db::BatchOp;
 use crate::merkle::Key;
 use crate::merkle::Value;
@@ -135,6 +136,17 @@ impl<T: Version0> Version0 for Box<[T]> {
                     num_items,
                     reader.remainder().len(),
                     T::MIN_BYTES_PER_ITEM
+                ),
+            ));
+        }
+        if num_items > T::MAX_ITEMS {
+            return Err(reader.invalid_item(
+                "array length",
+                "length less than or equal to the item type's maximum count",
+                format!(
+                    "{num_items} > {} ({})",
+                    T::MAX_ITEMS,
+                    std::any::type_name::<T>()
                 ),
             ));
         }
@@ -260,6 +272,7 @@ impl Version0 for FrozenChangeProof {
 
 impl Version0 for BatchOp<Key, Value> {
     const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    const MAX_ITEMS: usize = MAX_PROOF_ITEMS;
 
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         match reader
@@ -291,6 +304,10 @@ impl Version0 for BatchOp<Key, Value> {
 
 impl Version0 for ProofNode {
     const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+    // A valid proof is one path down from the root, so each node's key is longer
+    // than the key of the node before it. No key is longer than `MAX_KEY_NIBBLES`
+    // nibbles. So a valid proof holds at most `MAX_KEY_NIBBLES + 1` nodes.
+    const MAX_ITEMS: usize = MAX_KEY_NIBBLES + 1;
 
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let key = reader.read_v0_item::<PathBuf>()?;
@@ -348,6 +365,7 @@ impl Version0 for PathBuf {
 
 impl Version0 for (Box<[u8]>, Box<[u8]>) {
     const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    const MAX_ITEMS: usize = MAX_PROOF_ITEMS;
 
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let key: Box<[u8]> = reader.read_item()?;

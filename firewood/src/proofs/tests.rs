@@ -8,6 +8,7 @@ use firewood_storage::HashMode;
 use firewood_storage::HashType;
 use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
 use firewood_storage::PathComponent;
 use firewood_storage::SeededRng;
 use firewood_storage::TrieHash;
@@ -30,6 +31,7 @@ use super::types::ProofType;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
 use crate::api::MAX_KEY_BYTES;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::db::BatchOp;
 
 /// Length of the serialized proof header, which the wire stores uncompressed.
@@ -1931,6 +1933,9 @@ fn key_bound_message() -> String {
     format!("at most {MAX_KEY_BYTES} bytes")
 }
 
+/// The `expected` text a rejection for too many items carries.
+const COUNT_BOUND_MESSAGE: &str = "length less than or equal to the item type's maximum count";
+
 /// Asserts a bound test's deserialization outcome: accepted, or rejected with an
 /// `InvalidItem` naming the bounded item. Matching on the item keeps an unrelated
 /// deserialization failure from passing as the rejection.
@@ -2027,4 +2032,132 @@ fn test_proof_node_path_length_bound<H: HashMode>(nibbles: usize, accepted: bool
         "path length",
         &format!("at most {MAX_KEY_NIBBLES} nibbles"),
     );
+}
+
+/// A start or end proof holds at most `MAX_KEY_NIBBLES + 1` nodes (see
+/// `impl Version0 for ProofNode` in `de.rs`). A proof at that count
+/// deserializes, and one node over is rejected. The range proof carries the
+/// nodes as its start proof and the change proof as its end proof, so both
+/// proof types and both positions are exercised.
+#[hash_mode]
+#[test_case(MAX_KEY_NIBBLES + 1, true ; "at the bound")]
+#[test_case(MAX_KEY_NIBBLES + 2, false ; "one node over")]
+fn test_proof_node_count_bound<H: HashMode>(count: usize, accepted: bool) {
+    let nodes = || -> Box<[ProofNode]> {
+        (0..count)
+            .map(|_| ProofNode {
+                key: PathBuf::new(),
+                partial_len: 0,
+                value_digest: None,
+                child_hashes: DenseChildren::new(),
+            })
+            .collect()
+    };
+    let range = FrozenRangeProof::new(
+        Proof::new(nodes()),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+        H::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    range.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "array length",
+        COUNT_BOUND_MESSAGE,
+    );
+
+    let change = FrozenChangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(nodes()),
+        Box::new([]),
+        H::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    change.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenChangeProof::from_slice(&data),
+        accepted,
+        "array length",
+        COUNT_BOUND_MESSAGE,
+    );
+}
+
+/// A proof carries at most [`MAX_PROOF_ITEMS`] key-value pairs or batch
+/// operations. A proof at that count deserializes, and one item over is
+/// rejected. Empty items are the smallest on the wire, so they reach the bound
+/// with the shortest body.
+#[hash_mode]
+#[test_case(MAX_PROOF_ITEMS, true ; "at the bound")]
+#[test_case(MAX_PROOF_ITEMS + 1, false ; "one item over")]
+fn test_proof_item_count_bound<H: HashMode>(count: usize, accepted: bool) {
+    let range = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        (0..count)
+            .map(|_| (Box::<[u8]>::from([]), Box::<[u8]>::from([])))
+            .collect(),
+        H::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    range.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "array length",
+        COUNT_BOUND_MESSAGE,
+    );
+
+    let change = FrozenChangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        (0..count)
+            .map(|_| BatchOp::Delete {
+                key: Box::<[u8]>::from([]),
+            })
+            .collect(),
+        H::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    change.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenChangeProof::from_slice(&data),
+        accepted,
+        "array length",
+        COUNT_BOUND_MESSAGE,
+    );
+}
+
+/// The count is checked before any item is read, which is what keeps a decoded
+/// proof's memory bounded. Each body declares one item over its cap and follows
+/// the count with bytes that are not valid items. A check made only after
+/// reading would fail on those bytes with a different error.
+#[test_case(ProofType::Range, &[], MAX_KEY_NIBBLES + 2, 5, &[0, 0] ; "proof nodes")]
+#[test_case(ProofType::Range, &[0, 0], MAX_PROOF_ITEMS + 1, 2, &[] ; "key-value pairs")]
+#[test_case(ProofType::Change, &[0, 0], MAX_PROOF_ITEMS + 1, 2, &[] ; "batch operations")]
+fn test_item_count_checked_before_items_are_read(
+    kind: ProofType,
+    before: &[u8],
+    count: usize,
+    min_item_bytes: usize,
+    after: &[u8],
+) {
+    let mut body = before.to_vec();
+    body.extend_from_slice(&count.encode_var_vec());
+    body.resize(
+        body.len()
+            .saturating_add(count.saturating_mul(min_item_bytes)),
+        0xff,
+    );
+    body.extend_from_slice(after);
+    let mut data = Vec::new();
+    super::ser::write_framed_body(&body, kind, NodeHashAlgorithm::MerkleDB, &mut data)
+        .expect("frame body");
+    let result = if matches!(kind, ProofType::Change) {
+        FrozenChangeProof::from_slice(&data).map(drop)
+    } else {
+        FrozenRangeProof::from_slice(&data).map(drop)
+    };
+    assert_bound_outcome(result, false, "array length", COUNT_BOUND_MESSAGE);
 }
