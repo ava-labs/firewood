@@ -406,6 +406,7 @@ impl<H: HashMode> RevisionManager<H> {
 
         if proposal.root_hash() == current_revision.root_hash() {
             firewood_counter!(PROPOSAL_COMMITS_TRIVIAL).increment(1);
+            proposal.mark_absorbed();
             return Ok(current_revision.committed_id());
         }
 
