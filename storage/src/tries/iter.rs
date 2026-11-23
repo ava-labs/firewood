@@ -1,7 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{HashType, PathBuf, PathComponent, TrieNode, TriePath, tries::TrieEdgeState};
+use crate::HashType;
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::TrieNode;
+use crate::TriePath;
+use crate::tries::TrieEdgeState;
 
 /// A marker type for [`TrieEdgeIter`] that indicates that the iterator traverses
 /// the trie in ascending order.
@@ -88,11 +93,7 @@ where
 /// The passed in `children_iter` should be an iterator over the indices into
 /// the children array in the desired order (e.g. ascending or descending).
 macro_rules! descend {
-    (
-        $self:expr,
-        $node:expr,
-        $children_iter:expr
-    ) => {
+    ($self:expr, $node:expr, $children_iter:expr) => {
         if let Some((pc, state)) =
             $children_iter.find_map(|pc| $node.child_state(pc).map(|state| (pc, state)))
         {

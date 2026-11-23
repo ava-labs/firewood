@@ -3,9 +3,11 @@
 
 use std::fmt;
 
-use crate::value::BorrowedBytes;
-use crate::{OwnedBytes, OwnedSlice};
 use firewood::api;
+
+use crate::OwnedBytes;
+use crate::OwnedSlice;
+use crate::value::BorrowedBytes;
 
 /// A type alias for a rust-owned byte slice.
 pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
@@ -24,7 +26,8 @@ pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 #[repr(C, usize)]
 pub enum BatchOp<'a> {
     /// Insert or update a key with a value.
-    /// The value may be empty (zero-length).
+    /// The value may be empty (zero-length), except under the Ethereum hash
+    /// scheme, which rejects an empty value.
     Put {
         key: BorrowedBytes<'a>,
         value: BorrowedBytes<'a>,

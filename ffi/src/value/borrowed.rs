@@ -15,6 +15,20 @@ use crate::value::BatchOp;
 /// for the duration of the C function call that was passed this slice.
 pub type BorrowedBytes<'a> = BorrowedSlice<'a, u8>;
 
+/// A type alias for a borrowed slice of borrowed byte slices (a 2D byte array).
+///
+/// C callers can use this to pass in an array of byte slices, e.g. a list of
+/// 32-byte storage keys for [`fwd_eth_get_proof`]. Neither the outer array nor
+/// the inner slices are freed by Rust code.
+///
+/// C callers must ensure that the pointer, if not null, points to a valid slice
+/// of [`BorrowedBytes`] of length `len`, and that each inner slice is itself
+/// valid. Everything must remain valid for the duration of the C function call
+/// that was passed this slice.
+///
+/// [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+pub type BorrowedBytes2D<'a> = BorrowedSlice<'a, BorrowedBytes<'a>>;
+
 /// A type alias for a borrowed slice of [`BatchOp`]s.
 ///
 /// C callers can use this to pass in a slice of batch operations that will not

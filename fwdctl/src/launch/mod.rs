@@ -8,8 +8,11 @@ pub mod stage_config;
 
 use std::collections::HashMap;
 
-use clap::{Args, Subcommand, ValueEnum};
-use log::{debug, info};
+use clap::Args;
+use clap::Subcommand;
+use clap::ValueEnum;
+use log::debug;
+use log::info;
 use thiserror::Error;
 
 type FwdError = firewood::api::Error;
@@ -21,6 +24,9 @@ pub enum LaunchError {
 
     #[error("EC2 operation failed: {0}")]
     Ec2(Box<aws_sdk_ec2::Error>),
+
+    #[error("EC2 launch failed; required launch tags, including Owner, were not applied: {0}")]
+    OwnerTag(String),
 
     #[error("SSM operation failed: {0}")]
     Ssm(Box<aws_sdk_ssm::Error>),
@@ -291,7 +297,7 @@ pub struct DeployOptions {
     #[arg(long = "nblocks", value_name = "SIZE", value_enum, default_value_t = NBlocks::OneM)]
     pub nblocks: NBlocks,
 
-    /// Launch scenario from `benchmark/launch/launch-stages.yaml`
+    /// Launch scenario from `fwdctl/launch/launch-stages.yaml`
     #[arg(
         long = "scenario",
         value_name = "SCENARIO",
@@ -721,6 +727,7 @@ fn log_dry_run_plan(opts: &DeployOptions, ami_id: &str, user_data_size: usize, l
     info!("      tags:");
     info!("        ManagedBy=fwdctl");
     info!("        Component=firewood");
+    info!("        Owner={launched_by}");
     info!("        LaunchedBy={launched_by}");
     if let Some(tag) = &opts.custom_tag {
         info!("        CustomTag={tag}");

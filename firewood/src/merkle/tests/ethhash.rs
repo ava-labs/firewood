@@ -1,14 +1,54 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::OptionalHashKeyExt;
-
-use super::*;
 use ethereum_types::H256;
+use firewood_storage::Committed;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 use test_case::test_case;
+
+use super::*;
+use crate::merkle::Merkle;
+
+fn init_merkle<I, K, V>(items: I) -> Merkle<NodeStore<Committed, MemStore, EthHash>>
+where
+    I: Clone + IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    super::init_merkle::<EthHash, _, _, _>(items)
+}
+
+fn init_merkle_with_header<I, K, V>(
+    items: I,
+) -> (
+    Merkle<NodeStore<Committed, MemStore, EthHash>>,
+    NodeStoreHeader,
+)
+where
+    I: Clone + IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    super::init_merkle_with_header::<EthHash, _, _, _>(items)
+}
+
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, EthHash::ALGORITHM, proof)
+        .map(drop)
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeccakHasher;
@@ -173,7 +213,7 @@ fn test_root_hash_random_deletions() {
             let h0 = committed_merkle
                 .nodestore()
                 .root_hash()
-                .or_default_root_hash()
+                .or_else(EthHash::default_root_hash)
                 .unwrap();
 
             assert_eq!(h, h0);
@@ -184,7 +224,7 @@ fn test_root_hash_random_deletions() {
 }
 
 /// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
-fn empty_code_hash() -> [u8; 32] {
+pub(super) fn empty_code_hash() -> [u8; 32] {
     Keccak256::digest([]).into()
 }
 
@@ -194,7 +234,7 @@ fn empty_trie_root() -> [u8; 32] {
 }
 
 /// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
-fn rlp_encode_account(
+pub(super) fn rlp_encode_account(
     nonce: u64,
     balance: u64,
     storage_root: &[u8; 32],
@@ -211,12 +251,88 @@ fn rlp_encode_account(
 }
 
 /// RLP-encode a 32-byte storage slot value.
-fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
+pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
     use rlp::RlpStream;
 
     let mut rlp = RlpStream::new();
     rlp.append(&value.as_slice());
     rlp.out().to_vec()
+}
+
+/// Build a storage-slot key: `account_key` plus a 32-byte suffix of
+/// `first_suffix_byte` followed by zeros. At depth 64 the account branch fans
+/// out on the next nibble, so the high nibble of `first_suffix_byte` selects
+/// which child slot this entry occupies.
+pub(super) fn account_storage_key(account_key: &[u8], first_suffix_byte: u8) -> Box<[u8]> {
+    let mut suffix = [0u8; 32];
+    suffix[0] = first_suffix_byte;
+    [account_key, &suffix].concat().into()
+}
+
+/// Verify a range proof against `root_hash`, then round-trip it through
+/// serialize/deserialize and verify again. Both verifications must succeed.
+fn assert_range_proof_roundtrips(
+    first: Option<&[u8]>,
+    last: Option<&[u8]>,
+    root_hash: &TrieHash,
+    range_proof: &crate::api::FrozenRangeProof,
+) {
+    verify_range_proof(first, last, root_hash, range_proof).unwrap();
+    let mut serialized = Vec::new();
+    range_proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+    verify_range_proof(first, last, root_hash, &deserialized).unwrap();
+}
+
+/// The pieces a fold test needs from [`build_account_trie`].
+struct AccountTrie {
+    merkle: Merkle<NodeStore<Committed, MemStore, EthHash>>,
+    root_hash: TrieHash,
+    account_key: Box<[u8]>,
+    storage_keys: Box<[Box<[u8]>]>,
+}
+
+/// Build a committed trie: an account at `[0x10; 32]` with one storage slot per
+/// entry in `storage_child_nibbles` (each at `account_key ++ [nibble << 4, 0…]`,
+/// value `rlp_encode_storage([0x42 + i; 32])`), plus a trailing account at
+/// `[0xFF; 32]` so the proof has a right tail. The account values carry a
+/// placeholder storageRoot; live hashing recomputes the real one.
+///
+/// Each entry is the account-branch child the slot lands in, so the entry count
+/// is the storage-child count K the fold keys off: K=1 means the verifier must
+/// fold, K≥2 means it must not. Entries must be distinct (one child each).
+fn build_account_trie(storage_child_nibbles: &[u8]) -> AccountTrie {
+    let dummy_storage_root = [0u8; 32];
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_keys: Box<[Box<[u8]>]> = storage_child_nibbles
+        .iter()
+        .map(|&nibble| account_storage_key(account_key.as_ref(), nibble << 4))
+        .collect();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_values: Vec<Box<[u8]>> = (0u8..)
+        .take(storage_keys.len())
+        .map(|i| rlp_encode_storage(&[0x42u8.saturating_add(i); 32]).into())
+        .collect();
+    let following_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+
+    let mut items: Vec<(&[u8], &[u8])> = vec![(account_key.as_ref(), account_value.as_ref())];
+    for (k, v) in storage_keys.iter().zip(storage_values.iter()) {
+        items.push((k.as_ref(), v.as_ref()));
+    }
+    items.push((following_key.as_ref(), following_value.as_ref()));
+
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    }
 }
 
 /// Insert an account (and optional storage entries) into a trie, commit it,
@@ -322,6 +438,78 @@ fn test_persisted_storage_root_one_storage_entry() {
         expected.as_ref(),
         "storageRoot must match the hash of a standalone single-entry storage trie",
     );
+}
+
+/// Storage keys shorter than 32 bytes give storage nodes short enough to be
+/// inlined into their parent. The cases are an account whose storage root is a
+/// single inline node, a storage branch with two inline children, and a
+/// storage branch with one inline child and one hashed child. In each, the
+/// persisted storageRoot must equal the root of a standalone trie holding the
+/// storage entries, the whole trie must hash like an Ethereum state trie
+/// holding the account with that storageRoot, and range and key proofs over
+/// the trie must verify.
+#[test_case(&[(&[0xAB], &[0x02])]; "one short storage key")]
+#[test_case(&[(&[0x0B], &[0x02]), (&[0xAB], &[0x03])]; "two short storage keys")]
+#[test_case(&[(&[0x0B], &[0x02]), (&[0xA0; 32], &[0x03])]; "one short and one full storage key")]
+fn test_short_storage_keys_hash_like_ethereum(storage_entries: &[(&[u8], &[u8])]) {
+    let account_addr = [0u8; 20];
+    let dummy_storage_root = [0u8; 32];
+    let account_value = rlp_encode_account(0, 44, &dummy_storage_root, &empty_code_hash());
+
+    let storage_root = commit_and_read_storage_root(
+        &account_addr,
+        &account_value,
+        &dummy_storage_root,
+        storage_entries,
+    );
+    let expected_storage_root = init_merkle(storage_entries.iter().copied())
+        .nodestore()
+        .root_hash()
+        .expect("standalone storage trie should have a root");
+    assert_eq!(storage_root.as_slice(), expected_storage_root.as_ref());
+
+    let account_key_hash = Keccak256::digest(account_addr);
+    let mut items: Vec<(Key, Value)> = vec![(account_key_hash.as_slice().into(), account_value)];
+    for (suffix, value) in storage_entries {
+        items.push((
+            [account_key_hash.as_slice(), suffix].concat().into(),
+            Box::from(*value),
+        ));
+    }
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle
+        .nodestore()
+        .root_hash()
+        .expect("the trie holds an account");
+
+    let account_with_storage_root =
+        rlp_encode_account(0, 44, &expected_storage_root, &empty_code_hash());
+    let eth_root: TrieHash = KeccakHasher::trie_root([(
+        account_key_hash.as_slice(),
+        account_with_storage_root.as_ref(),
+    )])
+    .to_fixed_bytes()
+    .into();
+    assert_eq!(root_hash, eth_root);
+
+    let range_proof = merkle.range_proof(None, None, None).unwrap();
+    assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
+    for (key, _) in &items {
+        let stored = merkle
+            .get_value(key)
+            .unwrap()
+            .expect("every inserted key is stored");
+        merkle
+            .prove(key)
+            .unwrap()
+            .verify(
+                key.as_ref(),
+                Some(stored.as_ref()),
+                &root_hash,
+                EthHash::ALGORITHM,
+            )
+            .unwrap();
+    }
 }
 
 /// A branch account (two storage entries) should have its storageRoot set to
@@ -480,8 +668,10 @@ fn clobber_value_in_memstore(
     value_bytes: &[u8],
     replacement: &[u8],
 ) -> usize {
-    use firewood_storage::{ReadableStorage, WritableStorage};
     use std::io::Read;
+
+    use firewood_storage::ReadableStorage;
+    use firewood_storage::WritableStorage;
     assert_eq!(value_bytes.len(), replacement.len());
 
     let mut buf = Vec::new();
@@ -526,12 +716,13 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// root hash, but stale zeros in the stored account values.
 ///
 /// Then generate a range proof and verify it still passes. The proof-time fix
-/// in `ProofNode::from()` should detect the zeros and recompute the correct
-/// storageRoot from the node's children.
+/// in `ProofNode::from_path_item` should detect the zeros and recompute the
+/// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
-    use crate::RangeProof;
     use firewood_storage::WritableStorage;
+
+    use crate::RangeProof;
     type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
 
     let dummy_storage_root = [0u8; 32];
@@ -581,7 +772,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values, EthHash::ALGORITHM);
     verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
@@ -615,10 +806,12 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     storage.write(0, b"firewood-v1\0\0\0\0\0").unwrap();
 
     // Re-read the header from the clobbered storage so the version matches.
-    let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
+    let header = NodeStoreHeader::read_from_storage(&*storage, EthHash::ALGORITHM).unwrap();
 
     // Re-open from the clobbered MemStore so all reads come from disk.
-    let merkle = Merkle::from(NodeStore::open(&header, storage).unwrap());
+    let reopened: NodeStore<Committed, _, EthHash> =
+        NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
+    let merkle = Merkle::from(reopened);
 
     // Sanity check: the stored values now contain dummy zeros.
     for (k, _) in &*accounts {
@@ -647,4 +840,278 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         &range_proof,
     )
     .unwrap();
+}
+
+/// A limit-truncated range proof bounded inside an account's storage trie,
+/// covering the account + the first storage child. Truncation creates an
+/// out-of-range tail handled by the end-proof.
+///
+/// Runs for both:
+/// - One storage child (verifier must apply the storage-trie-root fold to
+///   match the on-disk hash).
+/// - Two storage children (verifier must NOT apply the fold even though
+///   only one storage child is in-range; the boundary detection has to
+///   count both in-range and out-of-range proof children).
+#[test_case(&[0xAu8] ; "single_storage_child")]
+#[test_case(&[0x1u8, 0x2u8] ; "multi_storage_child")]
+fn test_limit_truncated_range_proof_inside_account_with_storage_children(
+    storage_child_nibbles: &[u8],
+) {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(storage_child_nibbles);
+
+    let range_proof = merkle
+        .range_proof(None, None, std::num::NonZeroUsize::new(2))
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(
+        range_proof.key_values()[1].0.as_ref(),
+        storage_keys[0].as_ref()
+    );
+    assert!(!range_proof.end_proof().is_empty());
+
+    assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
+}
+
+/// A full unbounded range proof over a single-storage-child account. No
+/// truncation — exercises the fold path whenever the verifier rebuilds the
+/// storage child in-range, not only when a limit truncates the proof.
+#[test]
+fn test_full_range_proof_single_storage_child_account_no_truncation() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0xA]);
+
+    // Full, unbounded range proof with no key limit. The account, its lone
+    // storage child, and the trailing account are all in-range.
+    let range_proof = merkle.range_proof(None, None, None).unwrap();
+    assert_eq!(range_proof.key_values().len(), 3);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(
+        range_proof.key_values()[1].0.as_ref(),
+        storage_keys[0].as_ref()
+    );
+
+    assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
+}
+
+/// With `limit=1` the account is the only in-range key, so every storage
+/// child is out-of-range and carried solely as a hash in the account proof
+/// node. The verifier must copy those child hashes verbatim and must NOT
+/// apply the storage-trie-root fold — even in the single-child case, where
+/// `single_effective_account_child` returns `Some` but the child is
+/// out-of-range and never recursed into. Passes regardless of the
+/// verifier-side fold; guards a future dispatch refactor against
+/// double-folding an out-of-range lone child.
+#[test_case(&[0xAu8] ; "zero_in_range_single_child")]
+#[test_case(&[0x1u8, 0x3u8, 0x6u8] ; "zero_in_range_multi_child")]
+fn test_zero_in_range_storage_children_account_child_not_folded(storage_child_nibbles: &[u8]) {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        ..
+    } = build_account_trie(storage_child_nibbles);
+
+    // limit=1 → only the account is in-range; all storage children are
+    // out-of-range, represented only by hashes in the account proof node.
+    let range_proof = merkle
+        .range_proof(None, None, std::num::NonZeroUsize::new(1))
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 1);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+
+    assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
+}
+
+/// The single-storage-child fold must also be reached when the lone child
+/// is in-range behind a left (start) boundary — not only on unbounded or
+/// right-truncated proofs. A non-empty start proof anchors at the account;
+/// the storage child is in-range and rehashed via the fold.
+#[test]
+fn test_left_bounded_range_proof_single_storage_child_account() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0xA]);
+    let storage_key = &storage_keys[0];
+
+    // `start` sorts after the 32-byte account key but before its 0xAA-suffixed
+    // child, so the account is out-of-range (reconstructed from the start /
+    // exclusion proof) while its lone storage child is in-range and folded.
+    let start = account_storage_key(account_key.as_ref(), 0x00);
+    let range_proof = merkle
+        .range_proof(Some(start.as_ref()), None, None)
+        .unwrap();
+    let kvs = range_proof.key_values();
+    assert!(
+        kvs.iter().all(|(k, _)| k.as_ref() != account_key.as_ref()),
+        "account should be out-of-range (excluded by the start bound)"
+    );
+    assert!(
+        kvs.iter().any(|(k, _)| k.as_ref() == storage_key.as_ref()),
+        "the lone storage child should be in-range"
+    );
+    assert_range_proof_roundtrips(Some(start.as_ref()), None, &root_hash, &range_proof);
+}
+
+/// Multi-child accounts where the in-range storage children are a strict subset
+/// selected by boundaries that land between slots. The account sorts before the
+/// lower bound, so it is out-of-range (reconstructed from the start/exclusion
+/// proof); its storageRoot is recomputed from the union of in-range (recomputed)
+/// and out-of-range (copied-from-proof) children — so K≥2 ⇒ the fold must NOT
+/// apply. Covers the left-edge-only and both-edges shapes, which uniform-random
+/// ranges never produce.
+#[test_case(&[0x1u8, 0x8u8], 0x40, None ; "left_edge_only")]
+#[test_case(&[0x1u8, 0x4u8, 0x8u8], 0x30, Some(0x60) ; "both_edges")]
+fn test_bounded_multi_storage_child_union(
+    storage_child_nibbles: &[u8],
+    start_byte: u8,
+    end_byte: Option<u8>,
+) {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(storage_child_nibbles);
+
+    let start = account_storage_key(account_key.as_ref(), start_byte);
+    let end = end_byte.map(|b| account_storage_key(account_key.as_ref(), b));
+    let range_proof = merkle
+        .range_proof(Some(start.as_ref()), end.as_deref(), None)
+        .unwrap();
+
+    // The account is excluded by the lower bound; exactly one storage child
+    // ends up in-range (the rest are copied from the start/end proof nodes).
+    let kvs = range_proof.key_values();
+    assert!(
+        kvs.iter().all(|(k, _)| k.as_ref() != account_key.as_ref()),
+        "account should be excluded by the start bound"
+    );
+    let in_range_slots = kvs
+        .iter()
+        .filter(|(k, _)| storage_keys.iter().any(|s| s.as_ref() == k.as_ref()))
+        .count();
+    assert_eq!(
+        in_range_slots, 1,
+        "exactly one storage child should be in-range"
+    );
+
+    assert_range_proof_roundtrips(
+        Some(start.as_ref()),
+        end.as_deref(),
+        &root_hash,
+        &range_proof,
+    );
+}
+
+/// Assert that `range_proof`'s right edge is
+/// [`RightBoundary::OutOfRange`](crate::merkle::RightBoundary::OutOfRange) at
+/// `terminal_key`: its end proof ends at a value node that sorts after the
+/// last key-value, so the verifier recomputes that node's slot instead of
+/// reading it from the parent.
+fn assert_out_of_range_terminal(range_proof: &crate::api::FrozenRangeProof, terminal_key: &[u8]) {
+    let last_kv = range_proof.key_values().last().map(|(k, _)| k.as_ref());
+    let boundary = crate::merkle::right_edge(range_proof.end_proof().as_ref(), last_kv, None);
+    assert!(
+        matches!(
+            &boundary,
+            crate::merkle::RightBoundary::OutOfRange(k) if k.as_ref() == terminal_key
+        ),
+        "expected an out-of-range terminal at {terminal_key:02x?}, got {boundary:?}",
+    );
+}
+
+/// An honest proof whose out-of-range terminal is an account's lone storage
+/// child. The verifier rebuilds that child from its proof node and must fold
+/// it as a standalone storage-trie root, as live hashing does.
+#[test]
+fn test_out_of_range_terminal_lone_storage_child() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0xA]);
+    let storage_key = &storage_keys[0];
+
+    // A strict prefix of the storage key: it sorts below the storage key, and
+    // proving it walks through the account into the lone child's slot.
+    let end: Box<[u8]> = storage_key[..=account_key.len()].into();
+    let range_proof = merkle
+        .range_proof(Some(account_key.as_ref()), Some(end.as_ref()), None)
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 1);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_out_of_range_terminal(&range_proof, storage_key);
+
+    assert_range_proof_roundtrips(
+        Some(account_key.as_ref()),
+        Some(end.as_ref()),
+        &root_hash,
+        &range_proof,
+    );
+}
+
+/// An honest proof whose out-of-range terminal is an account with storage.
+/// The verifier rebuilds the account from its proof node and must recompute
+/// its storageRoot from the storage children, as live hashing does — with
+/// the single-child fold when there is one child and without it otherwise.
+#[test_case(&[0xAu8] ; "single_storage_child")]
+#[test_case(&[0x1u8, 0x8u8] ; "multi_storage_child")]
+fn test_out_of_range_terminal_account_with_storage(storage_child_nibbles: &[u8]) {
+    // Placeholder storageRoot; live hashing recomputes the real one.
+    let dummy_storage_root = [0u8; 32];
+    let leading_key: Box<[u8]> = [0x05u8; 32].into();
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+    let storage_keys: Box<[Box<[u8]>]> = storage_child_nibbles
+        .iter()
+        .map(|&nibble| account_storage_key(account_key.as_ref(), nibble << 4))
+        .collect();
+    let storage_value = rlp_encode_storage(&[0x42; 32]);
+    let leading_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let account_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+    let following_value = rlp_encode_account(3, 300, &dummy_storage_root, &empty_code_hash());
+
+    let mut items: Vec<(&[u8], &[u8])> = vec![
+        (leading_key.as_ref(), leading_value.as_ref()),
+        (account_key.as_ref(), account_value.as_ref()),
+    ];
+    items.extend(
+        storage_keys
+            .iter()
+            .map(|k| (k.as_ref(), storage_value.as_ref())),
+    );
+    items.push((following_key.as_ref(), following_value.as_ref()));
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // A strict prefix of the account key: it sorts after `leading_key` and
+    // before `account_key`, and proving it ends at the account.
+    let end: Box<[u8]> = account_key[..16].into();
+    let range_proof = merkle
+        .range_proof(Some(leading_key.as_ref()), Some(end.as_ref()), None)
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 1);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), leading_key.as_ref());
+    assert_out_of_range_terminal(&range_proof, &account_key);
+
+    assert_range_proof_roundtrips(
+        Some(leading_key.as_ref()),
+        Some(end.as_ref()),
+        &root_hash,
+        &range_proof,
+    );
 }

@@ -58,30 +58,78 @@
 
 use std::num::NonZeroUsize;
 
-use crate::api::{self, FrozenRangeProof, HashKey};
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
+
+use super::types::Proof;
+use super::types::ProofCollection;
+use crate::api;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
+use crate::merkle::subtrees_right_of;
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
-
-use super::types::{Proof, ProofCollection};
 
 /// `(start_key, end_key)` describing the next key range to fetch after a
 /// range or change proof. Returned by `find_next_key_after_*_proof`.
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`)
-/// can reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_range_proof`]) can reference the original
+/// verification parameters without re-validating.
+///
+/// Constructible only by [`verify_range_proof_structure`]; fields are private
+/// so a context cannot be forged or altered after verification.
 #[derive(Debug)]
 pub struct RangeProofVerificationContext {
+    root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
+    right_edge_key: Option<Box<[u8]>>,
+}
+
+impl RangeProofVerificationContext {
     /// The expected root hash of the trie.
-    pub root: HashKey,
+    #[must_use]
+    pub const fn root(&self) -> &HashKey {
+        &self.root
+    }
+
     /// The lower bound of the verified key range, if any.
-    pub start_key: Option<Box<[u8]>>,
-    /// The upper bound of the verified key range, if any.
-    pub end_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn start_key(&self) -> Option<&[u8]> {
+        self.start_key.as_deref()
+    }
+
+    /// The upper bound the caller **requested**, if any.
+    #[must_use]
+    pub fn end_key(&self) -> Option<&[u8]> {
+        self.end_key.as_deref()
+    }
+
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
-    pub max_length: Option<NonZeroUsize>,
+    #[must_use]
+    pub const fn max_length(&self) -> Option<NonZeroUsize> {
+        self.max_length
+    }
+
+    /// The actual right edge of the **proven** range, inclusive — see
+    /// [`ProvenRange::end`]. Equals `end_key` when the responder covered the
+    /// whole request, and a smaller key when the reply was truncated. `None`
+    /// means unbounded above. Callers applying the proof must bound the write
+    /// to this key, not to `end_key`.
+    ///
+    /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
+    ///
+    /// [`ProvenRange::end`]: crate::ProvenRange::end
+    /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
+    #[must_use]
+    pub fn right_edge_key(&self) -> Option<&[u8]> {
+        self.right_edge_key.as_deref()
+    }
 }
 
 /// Verify structural properties of a range proof and produce a
@@ -91,6 +139,11 @@ pub struct RangeProofVerificationContext {
 /// Enforces `max_length` against the proof's key-value count, then runs
 /// the cryptographic range-proof verification via
 /// [`verify_range_proof`].
+///
+/// # Node Hashing Algorithm
+///
+/// `algorithm` is the hash mode the caller expects; it is forwarded to
+/// [`verify_range_proof`], which rejects a header-mode-mismatched proof.
 ///
 /// # Errors
 ///
@@ -103,6 +156,7 @@ pub fn verify_range_proof_structure(
     root: HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
+    algorithm: NodeHashAlgorithm,
     max_length: Option<NonZeroUsize>,
 ) -> Result<RangeProofVerificationContext, api::Error> {
     if let Some(max) = max_length
@@ -113,20 +167,26 @@ pub fn verify_range_proof_structure(
         ));
     }
 
-    verify_range_proof(start_key, end_key, &root, proof)?;
+    let proven = verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
 
     Ok(RangeProofVerificationContext {
         root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
         max_length,
+        right_edge_key: proven.end,
     })
 }
 
 /// Determine the next key range to fetch after this range proof.
 ///
 /// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((last_key, end_key))`.
+/// for; otherwise returns `Some((start, end_key))` where `start` is the
+/// smallest key strictly above the last proven key, so that an inclusive
+/// request bound resumes without covering that key again. This is the same
+/// convention as [`find_next_key_after_change_proof`].
+///
+/// [`find_next_key_after_change_proof`]: crate::find_next_key_after_change_proof
 ///
 /// # Errors
 ///
@@ -136,8 +196,8 @@ pub fn find_next_key_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively returns the last key
-    // in the range, which is correct, but not ideal.
+    // TODO(#352): proper implementation, this naively resumes right after
+    // the last key in the range, which is correct, but not ideal.
     let Some((last_key, _)) = proof.key_values().last() else {
         // no key-values in the proof, so we are done
         return Ok(None);
@@ -155,7 +215,45 @@ pub fn find_next_key_after_range_proof(
         return Ok(None);
     }
 
-    Ok(Some((last_key.clone(), verification.end_key.clone())))
+    Ok(Some((
+        super::lex_successor(last_key),
+        verification.end_key.clone(),
+    )))
+}
+
+/// Nibble prefixes of the subtrees still to fetch after this range proof, in
+/// key order.
+///
+/// Each prefix names a non-empty subtree the end proof shows between the proven
+/// right edge and the requested end. Together they hold every remaining key, so
+/// the first prefix is where the next request can start. The last one may
+/// straddle the requested end. Empty when the proof covers the request.
+///
+/// A prefix of odd length ends mid-byte: its smallest key pads the last nibble
+/// with zero, and [`prefix_upper_bound`] gives its exclusive end.
+///
+/// [`prefix_upper_bound`]: firewood_storage::prefix_upper_bound
+///
+/// # Errors
+///
+/// Returns [`ProofError::ShouldBePrefixOfNextKey`] if `verification` came from
+/// a different proof whose end proof is not a root-to-leaf path.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "state sync, the only caller, is not yet merged")
+)]
+pub(crate) fn remaining_subtrees_after_range_proof(
+    proof: &FrozenRangeProof,
+    verification: &RangeProofVerificationContext,
+) -> Result<Vec<PathBuf>, api::Error> {
+    let Some(edge) = verification.right_edge_key() else {
+        return Ok(Vec::new());
+    };
+    Ok(subtrees_right_of(
+        proof.end_proof(),
+        edge,
+        verification.end_key(),
+    )?)
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
@@ -181,6 +279,12 @@ pub struct RangeProof<K, V, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     key_values: Box<[(K, V)]>,
+    /// The hash algorithm used to construct this proof or parsed from its header.
+    /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
+    /// resolves it from the self-describing header byte. A mismatch against
+    /// the algorithm a verifier expects is rejected with
+    /// [`ProofError::HashModeMismatch`].
+    hash_mode: NodeHashAlgorithm,
 }
 
 impl<K, V, H> std::fmt::Debug for RangeProof<K, V, H>
@@ -195,6 +299,7 @@ where
             .field("start_proof", &self.start_proof)
             .field("end_proof", &self.end_proof)
             .field("key_values", &self.key_values)
+            .field("hash_mode", &self.hash_mode)
             .finish()
     }
 }
@@ -227,17 +332,26 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    /// * `hash_mode` - The algorithm recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
         key_values: Box<[(K, V)]>,
+        hash_mode: NodeHashAlgorithm,
     ) -> Self {
         Self {
             start_proof,
             end_proof,
             key_values,
+            hash_mode,
         }
+    }
+
+    /// The hash algorithm this proof was constructed or parsed with.
+    #[must_use]
+    pub const fn hash_mode(&self) -> NodeHashAlgorithm {
+        self.hash_mode
     }
 
     /// Returns a reference to the start proof, which may be empty.
@@ -318,15 +432,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
-    #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
-
-    use crate::api::TryIntoBatch;
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
 
     use super::*;
+    use crate::api::TryIntoBatch;
 
+    #[hash_mode]
     #[test]
-    fn test_range_proof_iterator() {
+    fn test_range_proof_iterator<H: HashMode>() {
         // Create test data
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
             (b"key1".to_vec(), b"value1".to_vec()),
@@ -338,7 +454,7 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test basic iterator functionality
         let mut iter = range_proof.iter();
@@ -359,8 +475,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_range_proof_into_iterator() {
+    fn test_range_proof_into_iterator<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
             (b"a".to_vec(), b"alpha".to_vec()),
             (b"b".to_vec(), b"beta".to_vec()),
@@ -368,7 +485,7 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -383,14 +500,15 @@ mod tests {
         assert_eq!(items[1].1, b"beta");
     }
 
+    #[hash_mode]
     #[test]
-    fn test_keyvaluepair_iter_trait() {
+    fn test_keyvaluepair_iter_trait<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> =
             Box::new([(b"test".to_vec(), b"data".to_vec())]);
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test that our iterator implements KeyValuePairIter
         let iter = range_proof.iter();
@@ -409,18 +527,19 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_range_proof_iterator() {
+    fn test_empty_range_proof_iterator<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut iter = range_proof.iter();
         assert_eq!(iter.len(), 0);
         assert!(iter.next().is_none());
 
         let items: Vec<_> = range_proof.into_iter().collect();
-        assert!(items.is_empty());
+        assert_eq!(items, [] as [&(Vec<u8>, Vec<u8>); 0]);
     }
 }

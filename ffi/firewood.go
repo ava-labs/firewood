@@ -58,14 +58,12 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
-// NodeHashAlgorithm represents the node hashing algorithm used by the database;
-// this must match the algorithm previously used to crate the database.
+// NodeHashAlgorithm represents the node hashing algorithm used by the database.
+// It is a per-database runtime choice: a single binary can open databases of
+// either algorithm. When opening an existing database, the algorithm must match
+// the one the database was created with.
 //
 // Currently, there are only two variants but more may be added in the future.
-// At this time, the node hash algorithm used when opening the database must
-// match the compile-time feature used when building the FFI library. This
-// restriction will be lifted after #1088, which enables runtime selection of
-// the node hashing algorithm.
 type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
@@ -78,7 +76,12 @@ const (
 var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
-	// ErrActiveKeepAliveHandles is returned when attempting to close a database with unfreed memory.
+	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
+	// supplied context is cancelled before every outstanding handle that
+	// holds a keep-alive lease on the database has been released. That
+	// set includes [Proposal], [Revision], [Reconstructed], [Iterator] and
+	// [RangeProof] and instances. Pass [WithForceCloseHandles] to drop
+	// them automatically.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")
@@ -102,13 +105,24 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle             *C.DatabaseHandle
-	handleLock         sync.RWMutex
-	outstandingHandles sync.WaitGroup
+	handle     *C.DatabaseHandle
+	handleLock sync.RWMutex
+
+	// keepAlives tracks every outstanding [Proposal], [Revision],
+	// [Reconstructed], [Iterator], [RangeProof], and [ChangeProof] created
+	// from this database. It carries both the outstanding-handle count that
+	// [Database.Close] waits on and the registry of drop callbacks that
+	// [WithForceCloseHandles] uses to release them forcibly.
+	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
 	commitLock sync.Mutex
+
+	// metricsTag is the db_tag label the Rust recorder attaches to this
+	// database's metrics (see [WithMetricsTag]); Go-side histograms that have a
+	// database in scope use the same value so the two sides join on it.
+	metricsTag string
 }
 
 // config defines the internal configuration parameters used when opening a [Database].
@@ -118,13 +132,13 @@ type config struct {
 	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
 	nodeCacheSizeInBytes uint
-	// freeListCacheEntries is the number of entries in the freelist cache.
+	// freeListMemoryLimitKB is the memory limit for the freelist cache in kibibytes.
 	// Must be non-zero.
-	freeListCacheEntries uint
+	freeListMemoryLimitKB uint
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2 and > deferredPersistenceCommitCount.
+	// Must be >= 2 and > maxPersistenceGap.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -132,19 +146,19 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
-	// deferredPersistenceCommitCount determines the maximum number of unpersisted
-	// revisions that can exist at a given time.
-	// Note: revisions must be > deferredPersistenceCommitCount
-	deferredPersistenceCommitCount uint64
+	// metricsTag separates metrics and logs by database handle.
+	metricsTag string
+	// maxPersistenceGap is configured by WithMaxPersistenceGap.
+	maxPersistenceGap uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
-		revisions:                      100,
-		readCacheStrategy:              OnlyCacheWrites,
-		deferredPersistenceCommitCount: 1,
+		nodeCacheSizeInBytes:  128_000_000,
+		freeListMemoryLimitKB: 4096,
+		revisions:             100,
+		readCacheStrategy:     OnlyCacheWrites,
+		maxPersistenceGap:     1,
 	}
 }
 
@@ -168,20 +182,21 @@ func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	}
 }
 
-// WithFreeListCacheEntries sets the number of entries in the freelist cache.
-// The freelist cache manages available disk space for reuse.
+// WithFreeListMemoryLimitKB sets the memory limit for the freelist cache in kibibytes.
+// The freelist cache manages available disk space for reuse. Nothing is
+// preallocated, so this is an upper bound on the memory the cache may use.
 // Must be non-zero.
-// Default: 1,000,000
-func WithFreeListCacheEntries(entries uint) Option {
+// Default: 4096 (4 MB)
+func WithFreeListMemoryLimitKB(memoryLimitKB uint) Option {
 	return func(c *config) {
-		c.freeListCacheEntries = entries
+		c.freeListMemoryLimitKB = memoryLimitKB
 	}
 }
 
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2 and > WithDeferredPersistenceCommitCount.
+// Must be >= 2 and > WithMaxPersistenceGap.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -216,13 +231,25 @@ func WithExpensiveMetrics() Option {
 	}
 }
 
-// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
-// must be greater than `commitCount`.
-// Default: 1
-func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+// WithMetricsTag sets a tag to attach to metrics and logs emitted for this database.
+// Default: empty (no tag; metrics are recorded with the fallback db_tag="untagged" label)
+func WithMetricsTag(tag string) Option {
 	return func(c *config) {
-		c.deferredPersistenceCommitCount = commitCount
+		c.metricsTag = tag
+	}
+}
+
+// WithMaxPersistenceGap sets the maximum number of committed revisions that can
+// be ahead of the last persisted revision. A commit that would exceed this
+// distance blocks until persistence advances the checkpoint.
+//
+// Consequently, a persisted revision is guaranteed to be found by looking back
+// at most maxPersistenceGap revisions from any committed revision.
+//
+// Defaults to 1. Must be positive and less than the value set by [WithRevisions].
+func WithMaxPersistenceGap(maxPersistenceGap uint64) Option {
+	return func(c *config) {
+		c.maxPersistenceGap = maxPersistenceGap
 	}
 }
 
@@ -246,13 +273,13 @@ const (
 // algorithm and database options. The database directory will be created at the
 // provided path if it does not already exist.
 //
-// The [nodeHashAlgorithm] is required and must match the compile-time feature:
-//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
-//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+// The [nodeHashAlgorithm] is required and selects the database's hashing mode at
+// runtime, on a per-database basis:
+//   - EthereumNodeHashing for Ethereum-compatible (Keccak-256) hashing
+//   - MerkleDBNodeHashing for MerkleDB-compatible (SHA-256) hashing
 //
-// In the future, the node hash algorithm will be configurable at runtime and
-// no longer need to match compile-time features but will instead select the
-// desired hashing mode.
+// A single binary supports both modes. When opening an existing database, the
+// algorithm must match the one the database was created with.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -275,27 +302,31 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
-	if conf.freeListCacheEntries < 1 {
-		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
+	if conf.freeListMemoryLimitKB < 1 {
+		return nil, fmt.Errorf("free list memory limit in KB must be >= 1, got %d", conf.freeListMemoryLimitKB)
 	}
-
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
-		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
-		revisions:                         C.size_t(conf.revisions),
-		strategy:                          C.uint8_t(conf.readCacheStrategy),
-		truncate:                          C.bool(conf.truncate),
-		root_store:                        C.bool(conf.rootStore),
-		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
-		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
-		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
+		dir:                      newBorrowedBytes([]byte(dbDir), &pinner),
+		node_cache_memory_limit:  C.size_t(conf.nodeCacheSizeInBytes),
+		freelist_memory_limit_kb: C.size_t(conf.freeListMemoryLimitKB),
+		revisions:                C.size_t(conf.revisions),
+		strategy:                 C.uint8_t(conf.readCacheStrategy),
+		truncate:                 C.bool(conf.truncate),
+		root_store:               C.bool(conf.rootStore),
+		expensive_metrics:        C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:      C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		db_tag:                   newBorrowedBytes([]byte(conf.metricsTag), &pinner),
+		max_persistence_gap:      C.uint64_t(conf.maxPersistenceGap),
 	}
 
-	return getDatabaseFromHandleResult(C.fwd_open_db(args))
+	metricsTag := conf.metricsTag
+	if metricsTag == "" {
+		metricsTag = untaggedDBTag
+	}
+	return getDatabaseFromHandleResult(C.fwd_open_db(args), metricsTag)
 }
 
 // Update applies a batch of operations to the database, returning the hash of the
@@ -303,8 +334,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 // with [Database.Propose], then committing it with [Proposal.Commit].
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
-// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
-// remove keys.
+// with an empty value stores an empty value, except under [EthereumNodeHashing],
+// which rejects the whole batch. Use [Delete] or [PrefixDelete] to remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -331,8 +362,8 @@ func (db *Database) Update(batch []BatchOp) (Hash, error) {
 // freeing proposals. All proposals should be freed before closing the database.
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
-// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
-// remove keys.
+// with an empty value stores an empty value, except under [EthereumNodeHashing],
+// which rejects the whole batch. Use [Delete] or [PrefixDelete] to remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -350,7 +381,7 @@ func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db.keepAlives, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
@@ -427,10 +458,10 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	if root == EmptyRoot {
 		return nil, ErrRevisionNotFound
 	}
-	return db.Revision(root)
+	return db.revision(root)
 }
 
-// Revision returns a historical revision of the database.
+// Revision returns a revision of the database.
 // If the provided root does not exist (or is the [EmptyRoot]), it returns an
 // error. The [Revision] must be released with [Revision.Drop] before closing
 // the database.
@@ -442,57 +473,117 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
+	return db.revision(root)
+}
 
-	rev, err := getRevisionFromResult(C.fwd_get_revision(
+// revision assumes at least a read lock on db.handleLock is held.
+func (db *Database) revision(root Hash) (*Revision, error) {
+	return getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
-	), &db.outstandingHandles)
-	if err != nil {
-		return nil, err
-	}
+	), db.keepAlives)
+}
 
-	return rev, nil
+// CloseOption configures the behavior of [Database.Close].
+type CloseOption func(*closeConfig)
+
+type closeConfig struct {
+	forceCloseHandles bool
+}
+
+// WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
+// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
+// [ChangeProof] before closing the database, instead of waiting for the
+// caller to release them.
+//
+// Each handle is dropped once even if its underlying free errors, so a
+// failing free cannot stall the close. Dropping a handle can still wait
+// for an in-flight operation on it to finish, so a slow reader can delay
+// the close past the deadline. Drop errors are joined and returned, and
+// the database close is still attempted on a best-effort basis.
+//
+// While force-close is in progress, attempts to construct derived handles
+// (for example via [Proposal.Propose] or [Revision.Iter]) fail with an
+// error indicating the database is closed: a child constructor that would
+// otherwise race the close is rejected rather than leaking past it.
+//
+// Methods on a force-dropped handle behave the same as if the caller had
+// explicitly invoked Drop.
+func WithForceCloseHandles() CloseOption {
+	return func(c *closeConfig) {
+		c.forceCloseHandles = true
+	}
 }
 
 // Close releases the memory associated with the Database and stops the
 // background persistence thread.
 //
-// This blocks until all outstanding keep-alive handles are disowned or the
-// [context.Context] is cancelled. That is, until all Revisions and Proposals
-// created from this Database are either unreachable or one of
-// [Proposal.Commit], [Proposal.Drop], or [Revision.Drop] has been called on
-// them. Unreachable objects will be automatically released before Close returns,
-// unless an alternate GC finalizer is set on them.
+// By default Close blocks until all outstanding keep-alive handles are
+// disowned or the [context.Context] is cancelled. That is, until every
+// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
+// [ChangeProof] created from this Database is either unreachable or has
+// been explicitly released via [Proposal.Commit] or its Drop method.
+// Committing a proof does not release it. Unreachable objects are released
+// by their GC cleanups before Close returns. If the context expires first,
+// [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
+// called.
 //
-// This is safe to call multiple times; subsequent calls after the first will do
-// nothing.
-func (db *Database) Close(ctx context.Context) error {
+// Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
+// instead of waiting for the caller to release them. See
+// [WithForceCloseHandles] for details on its semantics, including how ctx
+// cancellation is reported.
+//
+// Safe to call multiple times; subsequent calls after the first are no-ops
+// and return nil.
+func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
+	cfg := closeConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	db.handleLock.Lock()
 	defer db.handleLock.Unlock()
 	if db.handle == nil {
 		return nil
 	}
 
-	done := make(chan struct{})
-	go func() {
-		db.outstandingHandles.Wait()
-		close(done)
-	}()
+	var forcedDropErr error
+	if cfg.forceCloseHandles {
+		forcedDropErr = db.keepAlives.closeAndForceDrop(ctx)
+	}
 
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
+	// waitForKeepAlives decides whether handles remain: nil once the count
+	// drains (even if ctx is already cancelled), ErrActiveKeepAliveHandles
+	// otherwise.
+	if err := db.waitForKeepAlives(ctx); err != nil {
+		// Graceful path: bookkeeping says handles are still live. Don't
+		// touch fwd_close_db — we'd be freeing the Db out from under
+		// objects whose Rust-side counterparts borrow it.
+		return errors.Join(forcedDropErr, err)
 	}
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
+	// Clear db.handle before fwd_close_db so any retry of Close is a no-op
+	// rather than re-entering with a possibly-freed pointer, regardless of
+	// whether the close succeeds or errors.
+	handle := db.handle
+	db.handle = nil
+	if err := getErrorFromVoidResult(C.fwd_close_db(handle)); err != nil {
+		return errors.Join(forcedDropErr, fmt.Errorf("unexpected error when closing database: %w", err))
 	}
 
-	db.handle = nil // Prevent double free
+	return forcedDropErr
+}
 
+// waitForKeepAlives blocks until the outstanding-handle count reaches
+// zero or ctx fires. Returns nil on drain, a wrapped
+// [ErrActiveKeepAliveHandles] on cancellation. Caller should hold
+// db.handleLock.Lock to prevent creating more handles.
+func (db *Database) waitForKeepAlives(ctx context.Context) error {
+	if err := db.keepAlives.waitDrained(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, err)
+	}
 	return nil
 }
 

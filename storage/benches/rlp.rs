@@ -27,8 +27,13 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use firewood_storage::{RlpItem, RlpList, encode_list, replace_list_field};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use firewood_storage::RlpItem;
+use firewood_storage::RlpList;
+use firewood_storage::encode_list;
+use firewood_storage::replace_list_field;
 
 // ---------- fixtures ----------
 

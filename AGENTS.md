@@ -10,7 +10,7 @@ and EVM-compatible blockchains that store state in Merkle tries.
 
 **Key Characteristics:**
 
-- Written in Rust (edition 2024, MSRV 1.94.0)
+- Written in Rust (edition 2024, MSRV 1.100.0)
 - Beta-level software with evolving API
 - Compaction-less database that directly stores trie nodes on-disk
 - Not built on generic KV stores (LevelDB/RocksDB)
@@ -40,6 +40,8 @@ firewood/             # Core library and main database implementation
 └── benches/          # Benchmarks
 
 firewood-macros/      # Procedural macros for the project
+metrics/              # Shared metrics utilities
+replay/               # Replay log types and engine for database operations
 storage/              # Storage layer implementation
 triehash/             # Trie hashing functionality
 ffi/                  # Foreign Function Interface (FFI) binding for Golang
@@ -48,9 +50,9 @@ ffi/                  # Foreign Function Interface (FFI) binding for Golang
 ├── proposal.go       # Go wrapper around the Firewood `Proposal` type
 └── revision.go       # Go wrapper around the Firewood `DbView` type
 fwdctl/               # CLI tool for interacting with Firewood databases
+└── launch/           # Launch stage config and host setup scripts used by `fwdctl launch`
 benchmark/            # Performance benchmarking suite
-├── bootstrap/        # Script for running C-Chain reexecution benchmark on an EC2 instance.
-└── setup-scripts/    # Scripts for setting up benchmark environments
+└── bootstrap/        # Script for running C-Chain reexecution benchmark on an EC2 instance.
 ```
 
 ## Important Terminology
@@ -63,20 +65,27 @@ benchmark/            # Performance benchmarking suite
 - **Commit**: Operation of applying Proposals to the most recent Revision
 - **Batch**: Ordered set of Put/Delete operations
 
+## Hash Modes
+
+The node-hashing scheme is a per-database runtime choice (selected when a
+database is created and recorded in its file header):
+
+- **MerkleDB mode**: SHA-256 hashing compatible with merkledb
+- **Ethereum mode**: Keccak-256 hashing; understands "account" nodes at
+  specific depths with RLP-encoded values and computes the account trie hash
+  as the actual root. When an account has exactly one storage child, that
+  child is hashed as a standalone storage-trie root, so its hash depends on
+  the account's storage-child count. A `Put` whose value is empty is rejected
+  with `api::Error::EmptyValue`, because the scheme encodes an empty value and
+  no value identically, so a key that should hold nothing must be deleted. See
+  `storage/src/hashers/ethhash.rs` for implementation details.
+
 ## Feature Flags
 
-### `ethhash`
+### `logger`
 
-By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
-
-- Changes hashing from SHA-256 to Keccak-256
-- Understands "account" nodes at specific depths with RLP-encoded values
-- Computes account trie hash as actual root
-- See `firewood/storage/src/hashers/ethhash.rs` for implementation details
-
-### `logging`
-
-Enable for runtime logging. Set `RUST_LOG` environment variable accordingly (uses `env_logger`).
+Enable for runtime logging. Set the `RUST_LOG` environment variable accordingly
+(uses `env_logger`).
 
 ## Common Development Tasks
 
@@ -86,17 +95,21 @@ Building and using the FFI library is a multi-step process. To generate the
 Firewood Rust FFI bindings:
 
 ```bash
-cd ffi/src                                              # Go to Rust binding directory
+cd ffi                                                  # Go to the FFI crate root
 cargo clean                                             # Remove any existing bindings
-cargo build --profile maxperf --features ethhash,logger # Generate bindings
+cargo build --profile maxperf --features logger         # Generate bindings
 ```
 
-To then have Golang utilize these new bindings:
+To then have Golang utilize these new bindings, from that same directory:
 
 ```bash
-cd ..                   # Go to ffi directory
 go tool cgo firewood.go # Generate cgo wrappers
 ```
+
+`go tool cgo` refreshes only the wrappers the Go linter reads. The `go:generate`
+directives in `ffi/firewood.go` additionally update the cgo pragmas and
+`LDFLAGS`, and CI checks that they leave the tree unchanged. Run
+`just ci-check-go-generate` when link flags or pragmas drift.
 
 Any tagged enums added to the FFI api where the union body contains a pointer must be defined as `#[repr(C, usize)]` so that the enum tag forces the C struct to have pointer alignment.
 
@@ -106,7 +119,18 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 ## Coding Conventions and Constraints
 
-For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
+For more information on coding conventions and constraints, please refer to [STYLE_GUIDE.md](./STYLE_GUIDE.md)
+
+## Design Documents
+
+Firewood records designs as living documentation in `docs/src/designs/`, rendered in
+the mdBook site. The naming convention, frontmatter schema, and the propose and promote
+workflows are documented in `docs/src/designs/README.md`; scaffold a new design with
+`just new-design <slug>`.
+
+Two constraints apply to every edit: never rename or move a design file, and never
+record a design's own proposal or last-updated date inside the file. The filename and
+git history already carry both.
 
 ## Commit and PR Title Convention
 
@@ -139,39 +163,129 @@ of the change.
 
 ## PR Strategy
 
-Before submitting/updating a PR, run the following
+GitHub Actions is authoritative for the full check matrix. Locally, the default
+gate before submitting or updating a PR is the light one:
 
 ```bash
-cargo fmt                                                               # Format code
-cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
-cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
-cargo doc --no-deps                                                     # Ensure docs build
+just prepush-lite
 ```
+
+That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
+`debug-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
+`ci-format` only *checks* formatting — run `just fmt` yourself to apply it.
+
+The full local matrix is available when a change warrants it — in particular
+when it touches the FFI, workspace dependencies, or code gated behind a feature
+that `debug-logger` does not enable:
+
+```bash
+just prepush
+```
+
+That is `just lint` followed by `just test`. Run either phase separately while
+iterating:
+
+```bash
+just lint
+just test
+```
+
+All of these recipes use the same lower-level `ci-*` recipes as GitHub Actions,
+keeping the local and CI commands in sync. Individual profiles are reachable
+directly — `just ci-rust clippy debug-all-features`, for example — which is
+usually cheaper than a whole phase when you already know what needs checking.
+
+If `just` is not installed, use `./scripts/run-just.sh prepush-lite`. The
+wrapper uses `just` when available, falls back to Nix when available, and
+otherwise prints installation instructions.
+
+The complete set of Rust profile names and Cargo arguments is defined in
+`scripts/run-rust-ci.sh`. Every profile there is portable to macOS, so the Just
+recipes and CI run the same set. The Justfile and CI workflows should pass
+profile names instead of duplicating Cargo feature and profile arguments. When
+changing a CI Rust matrix, update the shared script and both callers as needed.
 
 All tests must pass, and there should be no clippy warnings.
 
+### Toolchain Selection
+
+Two channels are in play:
+
+| Task | Channel |
+| --- | --- |
+| `cargo fmt`, clippy, miri | the nightly pinned by `rust-toolchain.toml` |
+| everything that builds or runs code | stable |
+| the weekly `lint-nightly` workflow | the floating nightly |
+
+`rust-toolchain.toml` is the only file holding the pinned date. A bare
+`cargo fmt` or `cargo clippy` resolves to it, and so does rust-analyzer, so
+editor formatting and diagnostics match CI without configuration. Pinning keeps
+a new toolchain release from breaking the `-D warnings` gate out of band;
+`lint-nightly.yaml` runs the floating nightly weekly so new lints still surface.
+
+Everything else is held to stable by `RUSTUP_TOOLCHAIN`, which outranks the
+toolchain file. It is set in three places:
+
+- `scripts/run-rust-ci.sh`, for its build and test commands
+- the `justfile`, for recipes that call Cargo directly
+- an `env:` block in each workflow, per job in `ci.yaml` because three of its
+  jobs want the pin
+
+Two consequences:
+
+- Rust CI jobs set up through the `$/.github/actions/setup-rust` composite
+  action. Its `toolchain:` input sets rustup's default, which
+  `rust-toolchain.toml` outranks. A job that must run stable says so with
+  `RUSTUP_TOOLCHAIN`.
+- `target/` roughly doubles, because Cargo hashes the compiler version into
+  each unit. Nothing rebuilds: stable and nightly artifacts coexist.
+
+`ffi/flake.nix` is outside this scheme. It exists only for avalanchego's ad hoc
+build and is not a supported development environment: it provides stable Rust
+with no rustup, so it never reads `rust-toolchain.toml`.
+
 ### Slow Tests
 
-If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
+`just test` runs every portable Rust test profile with nextest's `ci` profile,
+so tests prefixed with `test_slow_` are included automatically. Targeted or
+default-profile test commands are useful during development, but do not replace
+`just test` before pushing.
 
-```bash
-cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
-```
+### Linux-only Checks
 
-The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
+The local `lint`, `test`, `prepush`, and `prepush-lite` recipes are designed to
+run on macOS. They intentionally omit CI checks that require Linux: the
+differential fuzz jobs, which use Linux-specific resource limits and tooling.
+GitHub Actions remains authoritative for those.
+
+`--all-features` is *not* in that category. The `io-uring` feature is accepted on
+every platform but only takes effect on Linux, where `storage/build.rs` sets the
+`cfg(io_uring)` alias that gates the ring backend; elsewhere the feature is inert
+and the standard I/O path is used. So `debug-all-features` runs in `just lint`
+and `just test` like any other profile. Note this means the ring code itself is
+compiled only by the Linux CI jobs — a macOS-green `--all-features` run does not
+prove `storage/src/linear/io_uring.rs` builds.
+
+Do not add Linux-only commands to the macOS-compatible aggregate recipes.
+
+Two further CI checks have no local aggregate equivalent: the license-header
+check (a GitHub Action) and the `examples` job. The examples can be run
+manually with `just ci-rust benchmark-example <profile>` and
+`just ci-rust insert-example <profile>`.
 
 ### Markdown Linter
 
-If your PR touches any Markdown file, run the following:
+`just lint`, `just prepush`, and `just prepush-lite` run the Markdown checks
+used by CI. To run only the repository-wide Markdown check, use:
 
 ```bash
-markdownlint-cli2 .
+just ci-lint-markdown
 ```
 
 If the linter fails, run the following to fix any lint errors:
 
 ```bash
-markdownlint-cli2 . --fix
+just fix-markdown
 ```
 
 If you don't have `markdownlint-cli2` available on your system, run the
@@ -190,7 +304,9 @@ brew install markdownlint-cli2
 
 Key dependencies are centrally managed in workspace `Cargo.toml`:
 
-- `firewood`, `firewood-macros`, `firewood-storage`, `firewood-ffi`, `firewood-triehash` (workspace members)
+- Workspace members: `firewood`, `firewood-storage`, `firewood-triehash`,
+  `firewood-macros`, `firewood-metrics`, `firewood-ffi`, `firewood-fwdctl`,
+  `firewood-benchmark`, `firewood-replay`
 - Common deps: `clap`, `thiserror`, `smallvec`, `sha2`, `log`, etc.
 - Test deps: `criterion`, `tempfile`, `rand`, etc.
 
@@ -198,6 +314,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 - `README.md` - Main documentation
 - `CONTRIBUTING.md` - Contribution guidelines
+- `STYLE_GUIDE.md` - Style guide
 - `RELEASE.md` - Release process
 - `CHANGELOG.md` - Version history
 - `.devcontainer/` - Development container configuration
@@ -211,23 +328,49 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    blocks without documentation and strong justification. Unsafe code could be
    utilized in the `ffi` crate.
 
-2. **Testing**: Any changes should include appropriate tests. Run `cargo nextest run --release` to verify.
+2. **Testing**: Any changes should include appropriate tests. Run targeted tests
+   while iterating and `./scripts/run-just.sh prepush-lite` before handoff;
+   reach for the full `prepush` only when the change touches the FFI or a
+   feature combination `debug-logger` does not cover.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
-4. **Beta Status**: The API may change. Don't assume stability guarantees.
+4. **Depth Follows Key Length**: A peer's keys decide how deep a trie built
+   during proof verification is. Do not add a walk that recurses per trie level
+   on the call stack. Wrap each recursive call in
+   `firewood_storage::ensure_stack` (see `storage/src/stack.rs`) and add a depth
+   guard on a small thread stack, as
+   `hash_helper_survives_a_deep_chain_on_a_small_stack` does. Key length itself
+   is bounded by `firewood::api::MAX_KEY_BYTES` on both writes and decoded proofs.
 
-5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+5. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-6. **Documentation**: Public APIs should be well-documented. Run `cargo doc --no-deps` to check.
+6. **Hash Modes**: The hashing scheme (Ethereum Keccak-256 vs. merkledb SHA-256) is a per-database runtime choice, not a compile-time feature.
 
-7. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
+7. **Documentation**: Public APIs should be well-documented. The documentation
+   check is included in `./scripts/run-just.sh lint` and
+   `./scripts/run-just.sh prepush-lite`; run `./scripts/run-just.sh ci-docs` to
+   invoke it separately.
+
+8. **Comments Must Earn Their Line**: A comment competes with the code for the
+   reader's attention and must win on information. Generated comments fail in
+   recognizable ways — restating the line below, repeating the same explanation
+   at every call site, and narrating the change that produced them ("now uses",
+   "previously this would", "fixed to handle"). Write comments that stand alone
+   for a reader years from now who has no diff and no review thread: present
+   tense or imperative, consistent terminology, no filler or hype, each piece of
+   context stated once and cross-referenced from everywhere else. The same bar
+   applies to user-facing strings — error messages, log lines, and CLI help. See
+   [Comments and documentation](./STYLE_GUIDE.md#comments-and-documentation)
+   and [User-facing strings](./STYLE_GUIDE.md#user-facing-strings).
+
+9. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 
-See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review checks.
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the complete set of code review checks.
 
 ## Additional Resources
 
-- [Auto-generated docs](https://ava-labs.github.io/firewood/firewood/)
+- [Auto-generated docs](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 - [Issue tracker](https://github.com/ava-labs/firewood/issues)

@@ -1,6 +1,6 @@
 [package]
 name = "firewood-metrics"
-version = "0.5.0"
+version = "0.8.0"
 edition.workspace = true
 license-file.workspace = true
 homepage.workspace = true
@@ -11,6 +11,10 @@ description = "Shared metrics utilities for Firewood."
 
 [dependencies]
 metrics.workspace = true
+log = { workspace = true, optional = true, features = ["kv"] }
+
+[features]
+logger = ["dep:log"]
 
 [lints]
 workspace = true

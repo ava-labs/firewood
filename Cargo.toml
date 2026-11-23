@@ -10,7 +10,7 @@ members = [
   "storage",
   "triehash",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
@@ -18,7 +18,7 @@ license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.94.0"
+rust-version = "1.100.0"
 
 [profile.release]
 debug = true
@@ -35,6 +35,7 @@ unsafe_code = "deny"
 missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
+allow_attributes = "warn"
 unwrap_used = "warn"
 indexing_slicing = "warn"
 explicit_deref_methods = "warn"
@@ -54,48 +55,46 @@ unused_self = "allow"
 # lint for usize vs non-usize truncation.
 cast_possible_truncation = "allow"
 
-[patch.crates-io]
-metrics = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
-metrics-util = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
-metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
-
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.5.0" }
-firewood-macros = { path = "firewood-macros", version = "0.4.0" }
-firewood-storage = { path = "storage", version = "0.5.0" }
-firewood-ffi = { path = "ffi", version = "0.5.0" }
-firewood-metrics = { path = "metrics", version = "0.5.0" }
-firewood-replay = { path = "replay", version = "0.5.0" }
+firewood = { path = "firewood", version = "0.9.1" }
+firewood-macros = { path = "firewood-macros", version = "0.7.1" }
+firewood-storage = { path = "storage", version = "0.9.1" }
+firewood-metrics = { path = "metrics", version = "0.8.0" }
+firewood-replay = { path = "replay", version = "0.8.0" }
 
-# no longer bumping with workspace
-firewood-triehash = { path = "triehash", version = "0.0.16" }
+# Unmaintained and `publish = false`. No version, so `cargo publish` strips the
+# dev-dependency from the packaged manifest instead of resolving it on crates.io.
+firewood-triehash = { path = "triehash" }
 
 # common dependencies
 aquamarine = "0.6.0"
-bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
-bytemuck_derive = "1.10.2"
-clap = { version = "4.6.1", features = ["derive"] }
-env_logger = "0.11.10"
-fastrace = "0.7.17"
+bytemuck = { version = "1.25.2", features = ["const_zeroed"] }
+bytemuck_derive = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"] }
+env_logger = "0.11.11"
+fastrace = "0.7.19"
 hex = "0.4.3"
 integer-encoding = "4.1.0"
-log = "0.4.29"
-metrics = "0.24.3"
-metrics-util = "0.20.1"
-metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
+log = "0.4.35"
+metrics = "0.24.6"
+metrics-util = "0.20.4"
+metrics-collector-prometheus = "0.1.0"
 nonzero_ext = "0.3.0"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 rand_distr = "0.6.0"
-sha2 = "0.10.9"
-smallvec = { version = "1.15.1", features = ["write", "union", "const_new"] }
-test-case = "3.3.1"
-thiserror = "2.0.18"
+sha2 = "0.11.1"
+sha3 = "0.12.0"
+smallvec = { version = "1.16.5", features = ["write", "union", "const_new"] }
+stacker = "0.1.25"
+test-case = "3.4.1"
+thiserror = "2.0.21"
 
 # common dev dependencies
 criterion = "0.8.2"
 ethereum-types = "0.16.0"
 hex-literal = "1.1.0"
 pprof = "0.15.0"
-rand = "0.10.1"
+insta = "1.49.0"
+rand = "0.10.3"
 tempfile = "3.27.0"

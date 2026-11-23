@@ -8,43 +8,48 @@
 //!
 //! ## I/O Backend Support
 //!
-//! This module supports multiple I/O backends through conditional compilation:
+//! This module contains no conditional compilation of its own. It batches node
+//! writes and hands them to [`WritableStorage::write_batch`], and the backend is
+//! chosen by whichever implementation of that method is compiled in:
 //!
-//! - **Standard I/O** - `#[cfg(not(feature = "io-uring"))]` - Uses standard file operations
-//! - **io-uring** - `#[cfg(feature = "io-uring")]` - Uses Linux io-uring for async I/O
+//! - **Standard I/O** — the trait's default `write_batch`, which issues one
+//!   positioned write per node.
+//! - **io-uring** — an override on
+//!   [`FileBacked`](crate::linear::filebacked::FileBacked) that submits the
+//!   whole batch to a ring, reducing syscall overhead on high-throughput
+//!   workloads.
 //!
-//! This feature flag is automatically enabled when running on Linux, and disabled for all other platforms.
-//!
-//! The io-uring implementation provides:
-//! - Asynchronous batch operations
-//! - Reduced system call overhead
-//! - Better performance for high-throughput workloads
+//! The io-uring override is compiled in only under `cfg(io_uring)`, which
+//! requires both the `io-uring` feature and a Linux target. The feature is not
+//! enabled by default on any platform.
 //!
 //! ## Performance Considerations
 //!
 //! - Nodes are written in batches to minimize I/O overhead
 //! - Metrics are collected for flush operation timing
 //! - Memory-efficient serialization with pre-allocated buffers
-//! - Ring buffer management for io-uring operations
 
-use bumpalo::Bump;
 use std::iter::FusedIterator;
-
-use crate::linear::FileIoError;
-use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 use std::time::Instant;
 
-use crate::{MaybePersistedNode, NodeReader, WritableStorage};
+use bumpalo::Bump;
+use firewood_metrics::GaugeExt;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
 
-#[cfg(test)]
-use crate::RootReader;
-
-use super::alloc::NodeAllocator;
-use super::header::NodeStoreHeader;
-use super::{Committed, NodeStore};
-
+use super::Committed;
+use super::NodeStore;
 #[cfg(not(test))]
 use super::RootReader;
+use super::alloc::NodeAllocator;
+use super::header::NodeStoreHeader;
+use crate::HashMode;
+use crate::MaybePersistedNode;
+use crate::NodeReader;
+#[cfg(test)]
+use crate::RootReader;
+use crate::WritableStorage;
+use crate::linear::FileIoError;
 
 impl NodeStoreHeader {
     /// Persist this header to storage.
@@ -79,7 +84,7 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
 
         // we must have an unpersisted root node to use this iterator
         // It's hard to tell at compile time if this is the case, so we assert it here
-        // TODO: can we use another trait or generic to enforce this?
+        // TODO(rkuris): can we use another trait or generic to enforce this?
         debug_assert!(root.as_ref().is_none_or(|r| r.unpersisted().is_some()));
         let (child_iter_stack, stack) = if let Some(root) = root {
             if let Some(branch) = root
@@ -161,14 +166,14 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 /// # Errors
 ///
 /// Returns a [`FileIoError`] if the node cannot be allocated in storage.
-fn serialize_node_to_bump<'a>(
+fn serialize_node_to_bump<'a, H: HashMode>(
     bump: &'a bumpalo::Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
     let area_size_index = shared_node
-        .as_bytes(&mut bytes)
+        .as_bytes::<H, _>(&mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
     let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
@@ -176,7 +181,7 @@ fn serialize_node_to_bump<'a>(
     Ok((slice, persisted_address, area_size_index.size() as usize))
 }
 
-impl<S: WritableStorage> NodeStore<Committed, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
     /// Persist all the nodes of a proposal to storage, updating the header with new allocations.
     ///
     /// # Errors
@@ -221,7 +226,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
             // Serialize the node into the bump allocator
             let (slice, persisted_address, idx_size) =
-                serialize_node_to_bump(bump, &shared_node, node_allocator)?;
+                serialize_node_to_bump::<H>(bump, &shared_node, node_allocator)?;
 
             // NOTE(#1488): we need to set the address so that the parent node can
             // reference it when they are serialized within the same batch.
@@ -237,7 +242,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 // must persist freelist before writing anything
                 node_allocator.flush_freelist()?;
                 self.write_batch(allocated_objects)?;
-                allocated_objects = Vec::new();
+                #[expect(
+                    clippy::new_instead_of_clear,
+                    reason = "false positive: vec was consumed and ends bump borrow"
+                )]
+                {
+                    allocated_objects = Vec::new();
+                }
                 bump.reset();
                 allocated_len = 0;
             }
@@ -303,31 +314,48 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::*;
-    use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeHashAlgorithm, NodeStore,
-        NodeStoreHeader, Path, PathComponent, SharedNode,
-        linear::memory::MemStore,
-        node::{BranchNode, LeafNode, Node},
-        nodestore::{Mutable, Propose},
-    };
     use std::sync::Arc;
 
-    fn into_committed(
-        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
+    use firewood_macros::hash_mode;
+
+    use super::*;
+    use crate::Child;
+    use crate::Children;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::HashType;
+    use crate::ImmutableProposal;
+    use crate::LinearAddress;
+    use crate::MerkleDbHash;
+    use crate::NodeStore;
+    use crate::NodeStoreHeader;
+    use crate::Path;
+    use crate::PathComponent;
+    use crate::SharedNode;
+    use crate::linear::memory::MemStore;
+    use crate::node::BranchNode;
+    use crate::node::LeafNode;
+    use crate::node::Node;
+    use crate::nodestore::Mutable;
+    use crate::nodestore::Propose;
+
+    fn into_committed<H: HashMode>(
+        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore, H>,
         header: &mut NodeStoreHeader,
-    ) -> NodeStore<Committed, MemStore> {
+    ) -> NodeStore<Committed, MemStore, H> {
         let ns = ns.as_committed();
         ns.persist(header).unwrap();
         ns
     }
 
     /// Helper to create a test node store with a specific root
-    fn create_test_store_with_root(root: Node) -> NodeStore<Mutable<Propose>, MemStore> {
-        let mem_store = MemStore::default().into();
-        let mut store = NodeStore::new_empty_proposal(mem_store);
+    fn create_test_store_with_root<H: HashMode>(
+        root: Node,
+    ) -> NodeStore<Mutable<Propose>, MemStore, H> {
+        let mem_store = MemStore::new(Vec::new()).into();
+        let mut store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         store.root_mut().replace(root);
         store
     }
@@ -362,19 +390,22 @@ mod tests {
         Node::Branch(Box::new(branch))
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_nodestore() {
-        let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_proposal(mem_store);
+    fn test_empty_nodestore<H: HashMode>() {
+        let mem_store = MemStore::new(Vec::new()).into();
+        let store: NodeStore<Mutable<Propose>, _, H> =
+            NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_single_leaf_node() {
+    fn test_single_leaf_node<H: HashMode>() {
         let leaf = create_leaf(&[1, 2, 3], &[4, 5, 6]);
-        let store = create_test_store_with_root(leaf.clone());
+        let store = create_test_store_with_root::<H>(leaf.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
 
@@ -386,15 +417,16 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_branch_with_single_child() {
+    fn test_branch_with_single_child<H: HashMode>() {
         let leaf = create_leaf(&[7, 8], &[9, 10]);
         let branch = create_branch(
             &[1, 2],
             Some(&[3, 4]),
             vec![(PathComponent::ALL[5], leaf.clone())],
         );
-        let store = create_test_store_with_root(branch.clone());
+        let store = create_test_store_with_root::<H>(branch.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
 
@@ -412,8 +444,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_branch_with_multiple_children() {
+    fn test_branch_with_multiple_children<H: HashMode>() {
         let leaves = [
             create_leaf(&[1], &[10]),
             create_leaf(&[2], &[20]),
@@ -428,7 +461,7 @@ mod tests {
                 (PathComponent::ALL[10], leaves[2].clone()),
             ],
         );
-        let store = create_test_store_with_root(branch.clone());
+        let store = create_test_store_with_root::<H>(branch.clone());
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
@@ -448,8 +481,9 @@ mod tests {
         assert!(children_nodes.iter().any(|n| **n == leaves[2]));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_nested_branches() {
+    fn test_nested_branches<H: HashMode>() {
         let leaves = [
             create_leaf(&[1], &[100]),
             create_leaf(&[2], &[200]),
@@ -500,7 +534,7 @@ mod tests {
         }
         .into();
 
-        let store = create_test_store_with_root(root_branch.clone());
+        let store = create_test_store_with_root::<H>(root_branch.clone());
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
@@ -524,12 +558,14 @@ mod tests {
         assert!(inner_branch_pos < root_pos);
     }
 
+    #[hash_mode]
     #[test]
-    fn test_into_committed_with_generic_storage() {
+    fn test_into_committed_with_generic_storage<H: HashMode>() {
         // Create a base committed store with MemStore
-        let mem_store = MemStore::default();
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base_committed = NodeStore::new_empty_committed(mem_store.into());
+        let mem_store = MemStore::new(Vec::new());
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let base_committed: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(mem_store.into(), DeletedNodeTracking::Enabled);
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
@@ -549,7 +585,7 @@ mod tests {
         mutable_store.root_mut().replace(branch.clone());
 
         // Convert to immutable proposal
-        let immutable_store: NodeStore<Arc<ImmutableProposal>, _> =
+        let immutable_store: NodeStore<Arc<ImmutableProposal>, _, H> =
             mutable_store.try_into().unwrap();
 
         // Commit the immutable store

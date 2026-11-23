@@ -2,6 +2,183 @@
 default:
     ./scripts/run-just.sh --list
 
+# Run a Rust command with a named CI profile.
+ci-rust command profile:
+    ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}"
+
+# Run one bench target by name with the CI profile.
+ci-rust-bench profile target:
+    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}"
+
+# Emit workspace bench targets as a GitHub Actions matrix (optional name regex).
+ci-bench-matrix filter="":
+    ./scripts/list-bench-targets.sh "{{filter}}"
+
+# Check Rust formatting as CI does.
+#
+# Formatting wants the nightly rust-toolchain.toml pin, so this clears
+# RUSTUP_TOOLCHAIN rather than inheriting a value exported by the shell or a
+# parent recipe. Recipes that build or run code set it to stable instead. See
+# AGENTS.md, "Toolchain Selection".
+ci-format:
+    RUSTUP_TOOLCHAIN= cargo fmt -- --check
+
+# Apply the formatting `ci-format` checks.
+fmt:
+    RUSTUP_TOOLCHAIN= cargo fmt
+
+# Check TODO/FIXME annotations as CI does.
+ci-check-todos:
+    ./scripts/check-todos.sh
+
+# Build Rust documentation with CI's warning policy.
+ci-docs:
+    RUSTUP_TOOLCHAIN=stable RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
+
+# Lint the Markdown files selected by the shared markdownlint configuration.
+ci-lint-markdown:
+    markdownlint-cli2
+
+# Fix supported Markdown lint errors in the files selected by the shared config.
+fix-markdown:
+    markdownlint-cli2 --fix
+
+# Lint the Go FFI as CI does.
+ci-lint-ffi:
+    ./ffi/scripts/lint.sh
+
+# Check that `go generate` leaves the FFI sources unchanged, as CI does.
+ci-check-go-generate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Compare repository status before and after so pre-existing local
+    # modifications do not count as failures.
+    before=$(git status --porcelain)
+    (cd ffi && go generate)
+    after=$(git status --porcelain)
+    if [[ "$before" != "$after" ]]; then
+        echo "error: go generate resulted in changes to tracked files. Please commit these changes." >&2
+        git --no-pager diff
+        exit 1
+    fi
+
+# Check for unused Rust dependencies as CI does.
+ci-machete:
+    cargo machete --with-metadata
+
+# Build the Go FFI's Rust library; tests select hash mode at runtime.
+ci-build-ffi:
+    RUSTUP_TOOLCHAIN=stable cargo build --locked -p firewood-ffi --features logger
+
+# Check that the checked-in ffi/firewood.h matches what cbindgen generates, as CI does.
+ci-check-ffi-header: ci-build-ffi
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git --no-pager diff --exit-code -- ffi/firewood.h; then
+        echo "error: ffi/firewood.h is stale; run \`just ci-build-ffi\`, then stage or commit ffi/firewood.h" >&2
+        exit 1
+    fi
+
+# Test the Go FFI in one runtime hash mode against the built Rust library.
+ci-test-ffi hash_mode:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{hash_mode}}" in
+        firewood | ethhash) ;;
+        *) echo "error: unknown FFI hash mode '{{hash_mode}}'" >&2; exit 2 ;;
+    esac
+    cd ffi
+    GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE="{{hash_mode}}" go test -count=1 -race ./...
+
+# Test both explicit-hash-mode Go compatibility suites against the built FFI.
+ci-test-ffi-compat:
+    cd ffi/tests && go test -count=1 -race ./...
+
+# Discover and fuzz every Go compatibility target against the built FFI.
+ci-fuzz-ffi-compat:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ffi/tests
+    tests=$(go test -list '^Fuzz' .)
+    while IFS= read -r test; do
+        [[ "$test" == Fuzz* ]] || continue
+        go test -run '^$' -fuzz "^${test}$" -fuzztime=30s .
+    done <<< "$tests"
+
+# Run macOS-compatible CI lints.
+lint:
+    ./scripts/run-just.sh ci-format
+    ./scripts/run-just.sh ci-check-todos
+    ./scripts/run-just.sh ci-rust clippy debug-no-default-features
+    ./scripts/run-just.sh ci-rust clippy debug-no-features
+    ./scripts/run-just.sh ci-rust clippy debug-logger
+    ./scripts/run-just.sh ci-rust clippy debug-all-features
+    ./scripts/run-just.sh ci-rust clippy maxperf-logger
+    ./scripts/run-just.sh ci-lint-markdown
+    ./scripts/run-just.sh ci-docs
+    ./scripts/run-just.sh ci-lint-ffi
+    ./scripts/run-just.sh ci-check-go-generate
+    ./scripts/run-just.sh ci-check-ffi-header
+    ./scripts/run-just.sh ci-machete
+
+# Run macOS-compatible CI unit tests (differential fuzzing remains Linux-only).
+test:
+    ./scripts/run-just.sh ci-rust test debug-no-default-features
+    ./scripts/run-just.sh ci-rust test debug-no-features
+    ./scripts/run-just.sh ci-rust test debug-logger
+    ./scripts/run-just.sh ci-rust test debug-all-features
+    ./scripts/run-just.sh ci-rust test maxperf-logger
+    ./scripts/run-just.sh ci-build-ffi
+    ./scripts/run-just.sh ci-test-ffi firewood
+    ./scripts/run-just.sh ci-test-ffi ethhash
+    ./scripts/run-just.sh ci-test-ffi-compat
+
+# Run every macOS-compatible pre-push check, with linting first.
+prepush: lint test
+
+# `prepush`, minus the four extra Rust profiles, the FFI steps, and ci-machete.
+prepush-lite:
+    ./scripts/run-just.sh ci-format
+    ./scripts/run-just.sh ci-check-todos
+    ./scripts/run-just.sh ci-rust clippy debug-logger
+    ./scripts/run-just.sh ci-rust test debug-logger
+    ./scripts/run-just.sh ci-lint-markdown
+    ./scripts/run-just.sh ci-docs
+
+# Regenerate proof wire serialization snapshots for both hash modes.
+#
+# Run this after any intentional change to the proof binary format (ser.rs,
+# de.rs, childmask, or header). Covers ProofNode encoding, the 32-byte proof
+# header, key-value pair encoding, and BatchOp encoding. The hash mode is a
+# runtime choice, so a single run regenerates both the MerkleDB (SHA-256) and
+# Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when their
+# content changes.
+#
+# After running, review the diffs in src/proofs/snapshots/ and commit them
+# alongside the format change.
+snapshot-proof-nodes:
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run --locked -p firewood --features logger -E 'test(~snapshot_tests)'
+
+# Regenerate firewood-storage node serialization snapshots for both hash modes.
+#
+# Run this after any intentional change to Serializable impls (TrieHash,
+# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The hash mode
+# is a runtime choice, so a single run regenerates both the MerkleDB (SHA-256)
+# and Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when
+# their content changes.
+#
+# After running, review the diffs in storage/src/node/snapshots/ and commit
+# them alongside the format change.
+snapshot-nodes:
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run --locked -p firewood-storage --features logger -E 'test(~snapshot_tests)'
+
+# Regenerate all snapshots across the workspace for both hash modes.
+#
+# Alias for running snapshot-proof-nodes followed by snapshot-nodes. Use this
+# after a change that affects multiple snapshot suites simultaneously (e.g. a
+# shared encoding primitive or a proof format change that ripples into storage).
+snapshot-all: snapshot-proof-nodes snapshot-nodes
+
 # Build ffi with nix
 build-ffi-nix: check-nix
     cd ffi && nix build
@@ -40,19 +217,11 @@ check-golang-version: check-nix
     GO_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Go'")
     echo "go version in ffi/go.mod is ${GO_VERSION}"
 
-    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Go'")
-    echo "go version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
+    COMPAT_TESTS_VERSION=$(nix develop --command bash -c "cd tests && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/go.mod is ${COMPAT_TESTS_VERSION}"
 
-    if [[ "${GO_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
-        echo "❌ go version in ffi/tests/eth/go.mod should be ${GO_VERSION}"
-        FAILED=1
-    fi
-
-    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Go'")
-    echo "go version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
-
-    if [[ "${GO_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
-        echo "❌ go version in ffi/tests/firewood/go.mod should be ${GO_VERSION}"
+    if [[ "${GO_VERSION}" != "${COMPAT_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
@@ -60,9 +229,10 @@ check-golang-version: check-nix
     echo "golang provided by ffi/flake.nix is ${NIX_VERSION}"
 
     if [[ "${GO_VERSION}" != "${NIX_VERSION}" ]]; then
-        echo "❌ golang provided by ffi/flake/nix should be ${GO_VERSION}"
-        echo "It will be necessary to update the golang.url in ffi/flake.nix to point to a SHA of"\
-             "AvalancheGo whose nix/go/flake.nix provides ${GO_VERSION}."
+        echo "❌ golang provided by ffi/flake.nix should be ${GO_VERSION}"
+        echo "Point golang.url in ffi/flake.nix at an AvalancheGo commit whose"\
+             "nix/go/default.nix sets goVersion to ${GO_VERSION}, then run update-ffi-flake."\
+             "See 'Updating the Go version' in CONTRIBUTING.md."
     fi
 
     if [[ -n "${FAILED}" ]]; then
@@ -89,7 +259,7 @@ setup-go-workspace:
     if [ -f "go.work" ]; then
         rm go.work go.work.sum
     fi
-    go work init ./ffi ./ffi/tests/eth ./ffi/tests/firewood
+    go work init ./ffi ./ffi/tests
 
 # Run all checks of ffi built with nix
 test-ffi-nix: test-ffi-nix-go-bindings
@@ -115,7 +285,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     cd result/ffi
 
     # - cgocheck2 is expensive but provides complete pointer checks
-    # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
+    # - use hash mode ethhash to exercise Ethereum-compatible hashing at runtime
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date
@@ -134,6 +304,7 @@ update-ffi-flake: check-nix
 release-step-update-rust-dependencies:
     #!/usr/bin/env bash
     set -euo pipefail
+    export RUSTUP_TOOLCHAIN=stable
     echo "Checking that cargo-edit is installed and up-to-date..."
     cargo install --locked cargo-edit
 
@@ -148,7 +319,6 @@ release-step-update-rust-dependencies:
 
     echo "Executing tests to ensure upgrades did not break anything..."
     cargo test --workspace --all-targets -F logger
-    cargo test --workspace --all-targets -F ethhash,logger
 
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:
@@ -159,6 +329,47 @@ release-step-refresh-changelog tag:
 
     echo "Generating changelog..."
     git cliff -o CHANGELOG.md --tag "{{tag}}"
+
+# Regenerate the git-ignored mdBook preprocessor assets (prerequisite of book builds)
+book-assets:
+    mdbook-mermaid install docs
+
+# Serve the book locally with live reload
+book-serve: book-assets
+    mdbook serve docs --open
+
+# Build the book and run the link checker (the book-build + linkcheck part of CI,
+# not the full site assembly)
+book-build: book-assets
+    mdbook build docs
+
+# Scaffold a new proposed design document from the template
+new-design slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # quote() passes the argument as one shell word instead of splicing it into
+    # this script as source text.
+    slug={{quote(slug)}}
+    if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+        echo "error: slug must be lowercase kebab-case (a-z, 0-9, single hyphens): $slug" >&2
+        exit 1
+    fi
+    dir="docs/src/designs"
+    tmpl="$dir/template.md"
+    # The date prefix records when the design was proposed and never changes.
+    out="$dir/$(date +%F)-$slug.md"
+    if [[ -e "$out" ]]; then
+        # Two designs with the same slug on the same day collide; refuse rather than clobber.
+        echo "error: $out already exists" >&2
+        exit 1
+    fi
+    cp "$tmpl" "$out"
+    echo "Created $out"
+    echo "Next: fill it in, then add a row to $dir/README.md and an entry to docs/src/SUMMARY.md"
+
+# List design docs by last git-commit date (oldest/stalest first)
+design-age:
+    ./scripts/design-doc-age.sh
 
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.

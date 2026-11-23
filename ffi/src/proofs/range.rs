@@ -3,16 +3,26 @@
 
 use std::num::NonZeroUsize;
 
-use firewood::{
-    KeyRange, ProofError, RangeProofVerificationContext,
-    api::{self, DbView, FrozenRangeProof, HashKey},
-};
-use firewood_metrics::{MetricsContext, firewood_counter};
+use firewood::KeyRange;
+use firewood::ProofError;
+use firewood::RangeProofVerificationContext;
+use firewood::api;
+use firewood::api::DbView;
+use firewood::api::FrozenRangeProof;
+use firewood::api::HashKey;
+use firewood_metrics::MetricsContext;
+use firewood_metrics::firewood_counter;
 
-use crate::{
-    BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
-};
+use crate::BorrowedBytes;
+use crate::CodeIteratorHandle;
+use crate::CodeIteratorResult;
+use crate::DatabaseHandle;
+use crate::HashResult;
+use crate::Maybe;
+use crate::NextKeyRangeResult;
+use crate::RangeProofResult;
+use crate::ValueResult;
+use crate::VoidResult;
 
 /// Arguments for creating a range proof.
 #[derive(Debug)]
@@ -26,7 +36,7 @@ pub struct CreateRangeProofArgs<'a> {
     /// The start key must be less than the end key if both are provided.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to prove. If `None`, the range ends at the end
-    /// of the keyspace or until `max_length` items have been been included in
+    /// of the keyspace or until `max_length` items have been included in
     /// the proof.
     ///
     /// If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -58,8 +68,9 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     /// The upper bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover to the end of the keyspace.
     ///
-    /// This is ignored if the proof is truncated and does not cover the full,
-    /// in which case the upper bound key is the final key in the key-value pairs.
+    /// This is a ceiling, not an assertion: a proof carrying a key above this
+    /// bound is invalid, but a truncated proof may prove less and anchor at
+    /// its own right edge instead.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     /// If the proof contains more items than this, it is considered invalid. If
@@ -67,7 +78,7 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     pub max_length: u32,
 }
 
-/// FFI context for for a parsed or generated range proof.
+/// FFI context for a parsed or generated range proof.
 #[derive(Debug)]
 pub struct RangeProofContext<'db> {
     proof: FrozenRangeProof,
@@ -115,10 +126,10 @@ impl<'db> RangeProofContext<'db> {
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         if let Some(ref ctx) = self.verification {
-            if ctx.root == root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
+            if *ctx.root() == root
+                && ctx.start_key() == start_key
+                && ctx.end_key() == end_key
+                && ctx.max_length() == max_length
             {
                 // already verified with the same context
                 return Ok(());
@@ -129,14 +140,33 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
+        // This standalone verify path has no database handle in scope, so
+        // there is no caller-side mode to assert: verify under the proof's own
+        // self-describing mode. A cross-mode forgery is still caught by
+        // hashing because it cannot reproduce `root` under the wrong scheme.
         self.verification = Some(firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
+            self.proof.hash_mode(),
             max_length,
         )?);
         Ok(())
+    }
+
+    /// Returns the inclusive upper bound of the range the proof actually
+    /// proves, which may be narrower than the requested `end_key`. `None`
+    /// means proven to the end of the keyspace.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless [`Self::verify`] has succeeded first.
+    fn proven_end(&self) -> Option<&[u8]> {
+        self.verification
+            .as_ref()
+            .expect("verify() populates the verification context on success")
+            .right_edge_key()
     }
 
     /// Verify the range proof and prepare a proposal against the given database
@@ -164,7 +194,8 @@ impl<'db> RangeProofContext<'db> {
             return Ok(());
         }
 
-        let proposal = db.merge_key_value_range(start_key, end_key, self.proof.key_values())?;
+        let proven_end = self.proven_end();
+        let proposal = db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?;
         self.proposal_state = Some(ProposalState::Proposed(proposal.handle));
 
         Ok(())
@@ -177,7 +208,7 @@ impl<'db> RangeProofContext<'db> {
     /// prepared, it is committed instead of preparing a new one.
     ///
     /// However, if the prepared proposal is no longer valid (e.g., the
-    /// database has changed since it was prepared), the proposal is discared
+    /// database has changed since it was prepared), the proposal is discarded
     /// and a just-in-time proposal is created and committed.
     ///
     /// After committing or if the proof has already been committed, the
@@ -202,7 +233,8 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(proposal)) => proposal,
             None => {
                 allow_rebase = false;
-                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                let proven_end = self.proven_end();
+                db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                     .handle
             }
         };
@@ -212,8 +244,9 @@ impl<'db> RangeProofContext<'db> {
             && allow_rebase
         {
             // proposal is stale, try rebasing and committing again
+            let proven_end = self.proven_end();
             let proposal_handle = db
-                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                .merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                 .handle;
             proposal_handle.commit_proposal()
         } else {
@@ -230,15 +263,14 @@ impl<'db> RangeProofContext<'db> {
     /// Returns the next key range that should be fetched after processing this
     /// range proof, or [`None`] if there are no more keys to fetch.
     ///
-    /// The returned key range represents `(finalKey, endKey]` where finalKey is
-    /// is the last key known to be fully synchronized within the requested
-    /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided during proof creation.
+    /// The returned key range is `[start_key, end_key]`: `start_key` is the
+    /// smallest key above the last one known to be synchronized, and `end_key`
+    /// is the inclusive bound the proof was verified with, i.e. the `end_key`
+    /// of [`VerifyRangeProofArgs`], which need not match the `end_key` the
+    /// proof was created with.
     ///
-    /// Because the proof includes hash information about the state of the
-    /// database outside of the range of key-value pairs included in the proof,
-    /// we are able to inspect the database and provide a more accurate value
-    /// for `finalKey` than simply the last key in the set of key-value pairs.
+    /// The proof carries hashes for the state outside its key-value pairs, so
+    /// `start_key` could be tightened beyond the last key; #352 tracks that.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let verification = self
             .verification
@@ -253,7 +285,7 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
-        if root_hash.as_ref() == Some(&verification.root) {
+        if root_hash.as_ref() == Some(verification.root()) {
             return Ok(None);
         }
 
@@ -261,7 +293,7 @@ impl<'db> RangeProofContext<'db> {
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::new(self.proof.key_values())
+        CodeIteratorHandle::from_key_values(self.proof.hash_mode(), self.proof.key_values())
     }
 }
 
@@ -301,6 +333,38 @@ pub extern "C" fn fwd_db_range_proof(
                 .into_option(),
             NonZeroUsize::new(args.max_length as usize),
         )
+    })
+}
+
+/// Deserialize a range proof from bytes for use with `db`.
+///
+/// The database supplies the hash mode the proof must be encoded with; a
+/// proof whose header advertises another mode is rejected here, before its
+/// body is decompressed, rather than at verification.
+///
+/// # Arguments
+///
+/// - `db` - The database the proof will be verified against.
+/// - `bytes` - The bytes to deserialize the proof from.
+///
+/// # Returns
+///
+/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+///   was successfully parsed. This does not imply that the proof is valid, only that it is
+///   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
+/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
+///   or its hash mode does not match `db`'s.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_range_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
+    bytes: BorrowedBytes<'_>,
+) -> RangeProofResult<'static> {
+    // static lifetime is safe because the returned `RangeProofResult` does not
+    // retain a reference to the provided database handle.
+    crate::invoke_with_handle(db, move |db| {
+        FrozenRangeProof::from_slice_in_mode(&bytes, db.node_hash_algorithm())
+            .map_err(api::Error::ProofError)
     })
 }
 
@@ -381,7 +445,7 @@ pub extern "C" fn fwd_db_verify_range_proof<'db>(
         max_length,
     } = args;
 
-    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    let handle = db.zip(proof);
 
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
@@ -439,7 +503,7 @@ pub extern "C" fn fwd_db_verify_and_commit_range_proof<'db>(
         max_length,
     } = args;
 
-    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    let handle = db.zip(proof);
 
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
@@ -518,48 +582,6 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
     crate::invoke_with_handle(proof, RangeProofContext::code_hash_iter)
 }
 
-/// Advances the code hash iterator and returns the next code hash.
-///
-/// # Arguments
-///
-/// - `iter` - A [`CodeIteratorHandle`] previously returned from the
-///   `fwd_range_proof_code_hash_iter` method.
-///
-/// # Returns
-///
-/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`HashResult::Some`] containing the next code hash if successful.
-/// - [`HashResult::None`] if there are no more code hashes to iterate over.
-/// - [`HashResult::Err`] containing an error message if the next code hash could not be retrieved.
-///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same iterator
-/// nor is it safe to call any other function that accesses the same iterator
-/// concurrently. The caller must ensure exclusive access to the iterator
-/// for the duration of the call.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_code_hash_iter_next<'a>(
-    iter: Option<&'a mut CodeIteratorHandle<'a>>,
-) -> HashResult {
-    crate::invoke_with_handle(iter, CodeIteratorHandle::next)
-}
-
-/// Frees the memory associated with a `CodeIteratorHandle`.
-///
-/// # Arguments
-///
-/// - `iter` - The `CodeIteratorHandle` to free, previously returned from any Rust function.
-///
-/// # Returns
-///
-/// - [`VoidResult::Ok`] if the memory was successfully freed.
-/// - [`VoidResult::Err`] if the process panics while freeing the memory.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>) -> VoidResult {
-    crate::invoke_with_handle(iter, drop)
-}
-
 /// Serialize a `RangeProof` to bytes.
 ///
 /// # Arguments
@@ -572,36 +594,15 @@ pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>)
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if serialization panicked.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
+    crate::invoke_with_handle(proof, |ctx| -> Result<Option<Box<[u8]>>, api::Error> {
         let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
-        vec
-    })
-}
-
-/// Deserialize a `RangeProof` from bytes.
-///
-/// # Arguments
-///
-/// - `bytes` - The bytes to deserialize the proof from.
-///
-/// # Returns
-///
-/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
-/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
-///   was successfully parsed. This does not imply that the proof is valid, only that it is
-///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
-/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_from_bytes(
-    bytes: BorrowedBytes<'_>,
-) -> RangeProofResult<'static> {
-    crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes)
-            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
+        ctx.proof
+            .write_to_vec(&mut vec)
+            .map_err(api::Error::ProofError)?;
+        Ok(Some(vec.into_boxed_slice()))
     })
 }
 

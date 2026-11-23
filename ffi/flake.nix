@@ -1,18 +1,18 @@
 {
-  # To test with arbitrary firewood versions (alternative to firewood-go-ethhash):
+  # To test with arbitrary firewood versions (alternative to firewood-go):
   #  - Install nix: https://nixos.org/download/
   #  - Clone firewood locally at desired version/commit
   #  - Build: `cd ffi && nix build`
-  #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=/path/to/firewood/ffi/result/ffi`
+  #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go/ffi=/path/to/firewood/ffi/result/ffi`
 
   description = "Firewood FFI library and development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    rust-overlay.url = "github:oxalica/rust-overlay?ref=40e6ccc06e1245a4837cbbd6bdda64e21cc67379";
+    rust-overlay.url = "github:oxalica/rust-overlay?ref=84edd48f141b0c8910dffdd0296ddd577e829132";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
-    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=50585cbbdfe1af02a2c11bdc9fa77fca26e6b838";
+    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=4f8c6316bed83c3158aff4b4be43855caa14925f";
   };
 
   outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:

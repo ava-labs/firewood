@@ -5,16 +5,24 @@ use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_ec2::Client as Ec2Client;
-use aws_sdk_ec2::types::{
-    ArchitectureType, BlockDeviceMapping, EbsBlockDevice, Filter, IamInstanceProfileSpecification,
-    InstanceType as Ec2InstanceType, ResourceType, Tag, TagSpecification, VolumeType,
-};
+use aws_sdk_ec2::types::ArchitectureType;
+use aws_sdk_ec2::types::BlockDeviceMapping;
+use aws_sdk_ec2::types::EbsBlockDevice;
+use aws_sdk_ec2::types::Filter;
+use aws_sdk_ec2::types::IamInstanceProfileSpecification;
+use aws_sdk_ec2::types::InstanceType as Ec2InstanceType;
+use aws_sdk_ec2::types::ResourceType;
+use aws_sdk_ec2::types::Tag;
+use aws_sdk_ec2::types::TagSpecification;
+use aws_sdk_ec2::types::VolumeType;
 use aws_sdk_sts::Client as StsClient;
 use log::info;
 use tokio::sync::OnceCell;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
+use tokio::time::timeout;
 
-use super::{DeployOptions, LaunchError};
+use super::DeployOptions;
+use super::LaunchError;
 
 /// Time to wait after launch for the instance to transition to `running`.
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_mins(5);
@@ -28,6 +36,8 @@ const UBUNTU_NOBLE_AMI_NAME_PATTERN: &str =
     "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*";
 /// Root EBS volume size (GiB) for launched benchmark instances.
 const ROOT_VOLUME_SIZE_GIB: i32 = 50;
+/// Tag key identifying the AWS caller responsible for the instance.
+const OWNER_TAG_KEY: &str = "Owner";
 /// Tag key used to identify instances managed by `fwdctl`.
 const MANAGED_BY_TAG_KEY: &str = "ManagedBy";
 /// Tag value used to identify instances managed by `fwdctl`.
@@ -158,6 +168,18 @@ pub async fn launch_instance(
         .tag_specifications(
             TagSpecification::builder()
                 .resource_type(ResourceType::Instance)
+                .set_tags(Some(tags.clone()))
+                .build(),
+        )
+        .tag_specifications(
+            TagSpecification::builder()
+                .resource_type(ResourceType::Volume)
+                .set_tags(Some(tags.clone()))
+                .build(),
+        )
+        .tag_specifications(
+            TagSpecification::builder()
+                .resource_type(ResourceType::NetworkInterface)
                 .set_tags(Some(tags))
                 .build(),
         );
@@ -175,7 +197,12 @@ pub async fn launch_instance(
     }
 
     info!("Requesting EC2 instance: {}", opts.instance_type);
-    let response = request.send().await?;
+    // EC2 applies TagSpecifications as part of RunInstances. If tagging is not
+    // authorized, the request fails instead of creating an unowned instance.
+    let response = request
+        .send()
+        .await
+        .map_err(|error| LaunchError::OwnerTag(super::format_aws_sdk_error(&error)))?;
 
     response
         .instances()
@@ -209,6 +236,7 @@ fn build_tags(opts: &DeployOptions, instance_name: &str, username: &str) -> Vec<
     let mut tags = vec![
         tag("Name", instance_name),
         tag("Component", "firewood"),
+        tag(OWNER_TAG_KEY, username),
         tag("ManagedBy", "fwdctl"),
         tag("LaunchedBy", username),
     ];
@@ -260,15 +288,14 @@ pub async fn describe_ips(
     ec2: &Ec2Client,
     instance_id: &str,
 ) -> Result<(Option<String>, Option<String>), LaunchError> {
-    Ok(describe_instance(ec2, instance_id).await?.map_or_else(
-        || (None, None),
-        |instance| {
+    Ok(describe_instance(ec2, instance_id)
+        .await?
+        .map_or((None, None), |instance| {
             (
                 instance.public_ip_address().map(Into::into),
                 instance.private_ip_address().map(Into::into),
             )
-        },
-    ))
+        }))
 }
 
 async fn describe_instance(

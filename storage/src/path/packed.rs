@@ -1,9 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use super::PathComponent;
+use super::SplitPath;
+use super::TriePath;
+use super::TriePathFromPackedBytes;
 use crate::TriePathAsPackedBytes;
-
-use super::{PathComponent, SplitPath, TriePath, TriePathFromPackedBytes};
 
 /// A packed representation of a trie path where each byte encodes two path components.
 ///
@@ -254,8 +256,6 @@ impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use test_case::test_case;
 
     use super::*;

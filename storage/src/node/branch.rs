@@ -6,14 +6,22 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::io::Read;
+
+use crate::FileIoError;
+use crate::HashType;
+use crate::LeafNode;
+use crate::LinearAddress;
+use crate::MaybePersistedNode;
+use crate::Node;
+use crate::NodeReader;
+use crate::Path;
+use crate::PathComponent;
+use crate::SharedNode;
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
-use crate::{
-    FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
-    PathComponent, SharedNode,
-};
-use std::fmt::{Debug, Formatter};
-use std::io::Read;
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
@@ -214,7 +222,7 @@ impl Debug for BranchNode {
         for (i, c) in &self.children {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO
+                Some(Child::Node(_)) => {} // TODO(rkuris)
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
@@ -296,6 +304,31 @@ impl From<&LeafNode> for BranchNode {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
             children: Children::new(),
+        }
+    }
+}
+
+impl Drop for BranchNode {
+    /// Drops the children through `ensure_stack`, so freeing a
+    /// deep trie re-enters it at every level instead of recursing on the call
+    /// stack.
+    fn drop(&mut self) {
+        // Only a child that can own a node recurses: a branch held in place, or
+        // a hashed child that may still hold its node in memory. A branch whose
+        // children are all leaves or addresses, which is most of them, drops in
+        // place.
+        let may_recurse = self.children.iter().any(|(_, child)| {
+            matches!(
+                child,
+                Some(Child::Node(Node::Branch(_)) | Child::MaybePersisted(..))
+            )
+        });
+        if may_recurse {
+            crate::stack::ensure_stack(|| {
+                for (_, child) in &mut self.children {
+                    drop(child.take());
+                }
+            });
         }
     }
 }

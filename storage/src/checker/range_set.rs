@@ -4,12 +4,15 @@
 #![warn(clippy::pedantic)]
 
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::ops::Range;
 
+use crate::CheckerError;
+use crate::LinearAddress;
+use crate::StoredAreaParent;
 use crate::iter::write_limited_with_sep;
 use crate::nodestore::NodeStoreHeader;
-use crate::{CheckerError, LinearAddress, StoredAreaParent};
 
 const MAX_AREAS_TO_DISPLAY: usize = 10;
 
@@ -588,13 +591,15 @@ mod test_range_set {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test_linear_address_range_set {
 
-    use crate::{FreeListParent, PathComponent, TrieNodeParent, area_index};
+    use test_case::test_case;
 
     use super::*;
-    use test_case::test_case;
+    use crate::FreeListParent;
+    use crate::PathComponent;
+    use crate::TrieNodeParent;
+    use crate::area_index;
 
     const TEST_PARENT: StoredAreaParent = StoredAreaParent::TrieNode(TrieNodeParent::Root);
 
@@ -799,7 +804,7 @@ mod test_linear_address_range_set {
     fn test_display(items: usize, expected: &str) {
         let mut range_set = LinearAddressRangeSet::new(0x2000).unwrap();
         for i in 0..items {
-            #[allow(clippy::arithmetic_side_effects)]
+            #[expect(clippy::arithmetic_side_effects)]
             let offset = i as u64 * 0x20 + 0x1000;
             range_set
                 .insert_area(LinearAddress::new(offset).unwrap(), 0x10, TEST_PARENT)

@@ -1,10 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    Children, HashType, HashableShunt, IntoSplitPath, Node, Path, PathComponent, SplitPath,
-};
 use smallvec::SmallVec;
+
+use crate::Children;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashableShunt;
+use crate::IntoSplitPath;
+use crate::Node;
+use crate::NodeHashAlgorithm;
+use crate::Path;
+use crate::PathComponent;
+use crate::SplitPath;
+use crate::TrieHash;
 
 impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     /// Creates a new [`HashableShunt`] from the given `node` at the given `prefix`.
@@ -12,7 +21,7 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
         match node {
             Node::Branch(node) => {
                 // All child hashes should be filled in.
-                // TODO danlaine: Enforce this with the type system.
+                // TODO(#2052): Enforce this with the type system.
                 debug_assert!(
                     node.children
                         .iter()
@@ -37,21 +46,26 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     }
 }
 
-/// Returns the hash of `node`, which is at the given `path_prefix`.
+/// Returns the hash of `node`, which is at the given `path_prefix`, under the
+/// hashing scheme `H`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
-    HashableShunt::from_node(path_prefix.as_components(), node).to_hash()
+pub fn hash_node<H: HashMode>(node: &Node, path_prefix: &Path) -> HashType {
+    H::to_hash(&HashableShunt::from_node(path_prefix.as_components(), node))
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
+/// when hashing the node under the scheme `H`. The node is at the given
+/// `path_prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage<H: HashMode>(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
     let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
-    HashableShunt::from_node(path_prefix.as_components(), node).write(&mut buf);
+    H::write_preimage(
+        &HashableShunt::from_node(path_prefix.as_components(), node),
+        &mut buf,
+    );
     buf.into_boxed_slice()
 }
 
@@ -76,9 +90,10 @@ impl<A: smallvec::Array<Item = u8>> HasUpdate for SmallVec<A> {
 pub enum ValueDigest<T> {
     /// The node's value.
     Value(T),
-    #[cfg(not(feature = "ethhash"))]
     /// For MerkleDB hashing, the digest is the hash of the value if it is 32
-    /// bytes or longer.
+    /// bytes or longer. (Unused by the Ethereum scheme, which never stores a
+    /// value as a hash, but the variant exists unconditionally so both schemes
+    /// share one data type.)
     Hash(HashType),
 }
 
@@ -90,12 +105,13 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
                 // This proof proves that `key` maps to `got_value`.
                 got_value.as_ref() == expected.as_ref()
             }
-            #[cfg(not(feature = "ethhash"))]
             Self::Hash(got_hash) => {
-                use sha2::{Digest, Sha256};
+                use sha2::Digest;
+                use sha2::Sha256;
                 // This proof proves that `key` maps to a value
-                // whose hash is `got_hash`.
-                *got_hash == HashType::from(Sha256::digest(expected.as_ref()))
+                // whose hash is `got_hash`. `HashType` implements
+                // `PartialEq<TrieHash>`, so compare without re-wrapping.
+                *got_hash == TrieHash::from(Sha256::digest(expected.as_ref()))
             }
         }
     }
@@ -104,39 +120,39 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     pub fn as_ref(&self) -> ValueDigest<&[u8]> {
         match self {
             Self::Value(v) => ValueDigest::Value(v.as_ref()),
-            #[cfg(not(feature = "ethhash"))]
             Self::Hash(h) => ValueDigest::Hash(h.clone()),
         }
     }
 
     /// Returns the inner bytes if this digest carries a value, or `None` if
-    /// it carries only a hash. The `Hash` variant only exists in non-ethhash
-    /// builds, so in ethhash builds this function always returns `Some`.
+    /// it carries only a hash. The Ethereum scheme never produces a `Hash`
+    /// digest, so under that scheme this function always returns `Some`.
     pub fn value(&self) -> Option<&[u8]> {
         match self {
             Self::Value(v) => Some(v.as_ref()),
-            #[cfg(not(feature = "ethhash"))]
             Self::Hash(_) => None,
         }
     }
 
-    /// Convert the value to a hash if it is not already a hash.
+    /// Convert the value to a hash if it is not already a hash, under the
+    /// given `algorithm`.
     ///
-    /// If the value is less than 32 bytes, it will be passed through as is
-    /// instead of hashing.
+    /// Under the MerkleDB scheme, a value of 32 bytes or more is replaced by
+    /// its SHA-256 hash; shorter values pass through unchanged. The Ethereum
+    /// scheme never hashes values, so this is the identity there.
     ///
-    /// If etherum hashing is enabled, this will always return the value as is.
-    pub fn make_hash(&self) -> ValueDigest<&[u8]> {
+    /// The capping is the MerkleDB scheme's behavior, selected by `algorithm`
+    /// rather than the compile-time default.
+    pub fn make_hash(&self, algorithm: NodeHashAlgorithm) -> ValueDigest<&[u8]> {
         match self.as_ref() {
-            #[cfg(not(feature = "ethhash"))]
-            ValueDigest::Value(v) if v.len() >= 32 => {
-                use sha2::{Digest, Sha256};
-                ValueDigest::Hash(HashType::from(Sha256::digest(v)))
+            ValueDigest::Value(v) if v.len() >= 32 && !algorithm.is_ethereum() => {
+                use sha2::Digest;
+                use sha2::Sha256;
+                ValueDigest::Hash(HashType::from(TrieHash::from(Sha256::digest(v))))
             }
 
             ValueDigest::Value(v) => ValueDigest::Value(v),
 
-            #[cfg(not(feature = "ethhash"))]
             ValueDigest::Hash(v) => ValueDigest::Hash(v),
         }
     }
@@ -145,7 +161,6 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     pub fn map<O>(self, f: impl FnOnce(T) -> O) -> ValueDigest<O> {
         match self {
             Self::Value(v) => ValueDigest::Value(f(v)),
-            #[cfg(not(feature = "ethhash"))]
             Self::Hash(h) => ValueDigest::Hash(h),
         }
     }
@@ -155,7 +170,6 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for ValueDigest<T> {
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::Value(v) => v.as_ref(),
-            #[cfg(not(feature = "ethhash"))]
             Self::Hash(h) => h.as_ref(),
         }
     }
@@ -189,13 +203,4 @@ pub trait Hashable: std::fmt::Debug {
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> Children<Option<HashType>>;
-}
-
-/// A preimage of a hash.
-pub trait Preimage: std::fmt::Debug {
-    /// Returns the hash of this preimage.
-    fn to_hash(&self) -> HashType;
-
-    /// Write this hash preimage to `buf`.
-    fn write(&self, buf: &mut impl HasUpdate);
 }

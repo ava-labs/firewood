@@ -12,14 +12,21 @@
 
 use std::fs::File;
 use std::os::raw::c_int;
+use std::path::Path as FsPath;
 
+use criterion::Bencher;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::profiler::Profiler;
-use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{Children, LeafNode, Node, Path, PathComponent};
+use firewood_storage::Children;
+use firewood_storage::EthHash;
+use firewood_storage::LeafNode;
+use firewood_storage::Node;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
-
-use std::path::Path as FsPath;
 
 // For flamegraphs:
 // cargo bench --bench serializer -- --profile-time=5
@@ -65,17 +72,19 @@ fn manual_serializer(b: &mut Bencher, input: &Node) {
     b.iter(|| to_bytes(input));
 }
 
+#[expect(clippy::ptr_arg, reason = "criterion passes the input as `&Vec<u8>`")]
 fn manual_deserializer(b: &mut Bencher, input: &Vec<u8>) {
-    let (_area_index, input) = input
-        .as_slice()
-        .split_first()
-        .expect("always has at least one byte");
-    b.iter(|| Node::from_reader(&mut std::io::Cursor::new(input)).expect("to deserialize node"));
+    let (_area_index, input) = input.split_first().expect("always has at least one byte");
+    b.iter(|| {
+        Node::from_reader::<EthHash>(&mut std::io::Cursor::new(input)).expect("to deserialize node")
+    });
 }
 
 fn to_bytes(input: &Node) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let _area_index = input.as_bytes(&mut bytes).expect("to serialize node");
+    let _area_index = input
+        .as_bytes::<EthHash, _>(&mut bytes)
+        .expect("to serialize node");
     bytes
 }
 
@@ -132,6 +141,7 @@ fn branch(c: &mut Criterion) {
     group.finish();
 }
 
+// TODO(RodrigoVillar): follow up by running benchmarks with both Ethereum and MerkleDB hashing schemes.
 criterion_group!(
     name = serializers;
     config = Criterion::default().with_profiler(FlamegraphProfiler::Init(100));

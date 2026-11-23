@@ -4,15 +4,16 @@
 //! # Ethereum MPT path encoding
 //!
 //! Encoding primitives for the Ethereum Modified Merkle Patricia Trie that are
-//! needed by both the ethhash hasher and the `eth_getProof`-compatible proof
-//! emitter. These helpers are unconditionally compiled so the proof emitter
-//! (which is itself always compiled) can call them without pulling in the
-//! `ethhash` feature gate.
+//! needed by both the Ethereum-mode hasher and the `eth_getProof`-compatible
+//! proof emitter. These helpers are always compiled, since the hash scheme is a
+//! per-database runtime choice rather than a build-time selection.
 
-use crate::TriePath;
+use std::iter::once;
+
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use std::iter::once;
+
+use crate::TriePath;
 
 /// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
 ///
@@ -54,7 +55,7 @@ pub fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVe
         first_byte.set_low_nibble(low_nibble.as_u8());
     } else {
         // as_rchunks can only return 0 or 1 element in the first slice if N is 2
-        debug_assert!(maybe_low_nibble.is_empty());
+        debug_assert_eq!(maybe_low_nibble, []);
     }
 
     // now assemble everything: the first byte, and the nibble pairs compacted back together
@@ -67,7 +68,8 @@ pub fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVe
 mod test {
     use test_case::test_case;
 
-    use crate::{PathComponent, TriePathFromUnpackedBytes};
+    use crate::PathComponent;
+    use crate::TriePathFromUnpackedBytes;
 
     #[test_case(&[], false, &[0x00])]
     #[test_case(&[], true, &[0x20])]

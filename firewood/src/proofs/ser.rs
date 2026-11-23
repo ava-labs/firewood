@@ -7,20 +7,26 @@
 //! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
 //! for transmission or persistent storage.
 
-use firewood_storage::{PathBuf, PathComponentSliceExt, ValueDigest};
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponentSliceExt;
+use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
-use super::{
-    header::Header,
-    types::{ProofNode, ProofType},
-};
+use super::frame::MAX_DECOMPRESSED_LEN;
+use super::header::Header;
+use super::types::ProofError;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::db::BatchOp;
+use crate::merkle::Key;
+use crate::merkle::Value;
 use crate::merkle::childmask::ChildMask;
-use crate::{
-    api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
-    merkle::{Key, Value},
-    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-};
+use crate::proofs::magic::BATCH_DELETE;
+use crate::proofs::magic::BATCH_DELETE_RANGE;
+use crate::proofs::magic::BATCH_PUT;
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.
@@ -28,12 +34,16 @@ impl FrozenRangeProof {
     /// # Format
     ///
     /// The V0 serialization format for a range proof is:
-    ///
     #[expect(
         rustdoc::private_intra_doc_links,
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - A single zstd frame compressing the canonical body (see
+    ///   `proofs::frame` for the framing, bounds, and canonicality rules).
+    ///
+    /// The canonical body, once decompressed, is:
+    ///
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
@@ -77,16 +87,104 @@ impl FrozenRangeProof {
     /// indicating the number of items in the sequence.
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Range).write_item(out);
-        self.write_item(out);
+    ///
+    /// Readers reject a key longer than 1024 bytes and a proof-node key longer
+    /// than 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
+    /// the size cap or [`ProofError::Compression`] if the compression
+    /// fails; `out` is untouched on error.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        write_framed_body(&body, ProofType::Range, self.hash_mode(), out)
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body: the bytes
+    /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
+    /// the sequence to hash or compare for a proof's canonical identity.
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
+        // The proof's hash mode selects the child-hash wire layout and
+        // value-digest hashing rule.
+        let mut w = ProofWriter {
+            out,
+            mode: self.hash_mode(),
+        };
+        self.write_item(&mut w);
     }
 }
 
 impl FrozenChangeProof {
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Change).write_item(out);
-        self.write_item(out);
+    /// Serializes this proof into the provided byte vector.
+    ///
+    /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
+    /// type set to change, and the canonical body carries the batch
+    /// operations in place of the key-value pairs.
+    ///
+    /// # Errors
+    ///
+    /// Errors as [`FrozenRangeProof::write_to_vec`].
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        write_framed_body(&body, ProofType::Change, self.hash_mode(), out)
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body. See
+    /// [`FrozenRangeProof::write_body_to_vec`].
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
+        let mut w = ProofWriter {
+            out,
+            mode: self.hash_mode(),
+        };
+        self.write_item(&mut w);
+    }
+}
+
+/// Frames a canonical body: the header, then the compressed body, after
+/// checking the decoder's size cap so a message no peer would accept is
+/// reported at the source instead of emitted. `out` is untouched on error.
+pub(crate) fn write_framed_body(
+    body: &[u8],
+    kind: ProofType,
+    mode: NodeHashAlgorithm,
+    out: &mut Vec<u8>,
+) -> Result<(), ProofError> {
+    check_body_len(body.len())?;
+    let start = out.len();
+    let header = Header::from((kind, mode));
+    out.extend_from_slice(bytemuck::bytes_of(&header));
+    let result = super::frame::write_compressed_body(body, out);
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
+}
+
+/// Rejects a canonical body larger than the cap decoders enforce.
+const fn check_body_len(len: usize) -> Result<(), ProofError> {
+    if len > MAX_DECOMPRESSED_LEN {
+        return Err(ProofError::BodyTooLarge {
+            len,
+            limit: MAX_DECOMPRESSED_LEN,
+        });
+    }
+    Ok(())
+}
+
+/// Mirrors `ProofReader`: carries the output buffer and the hash mode the proof
+/// is encoded with. Mode-dependent items (`ValueDigest`, `HashType`) consult
+/// `node_hash_algorithm()`; everything else just writes.
+struct ProofWriter<'a> {
+    out: &'a mut Vec<u8>,
+    mode: NodeHashAlgorithm,
+}
+
+impl ProofWriter<'_> {
+    const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.mode
     }
 }
 
@@ -104,42 +202,42 @@ impl PushVarInt for Vec<u8> {
 }
 
 trait WriteItem {
-    fn write_item(&self, out: &mut Vec<u8>);
+    fn write_item(&self, w: &mut ProofWriter<'_>);
 }
 
 impl WriteItem for FrozenRangeProof {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.start_proof().write_item(out);
-        self.end_proof().write_item(out);
-        self.key_values().write_item(out);
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        self.start_proof().write_item(w);
+        self.end_proof().write_item(w);
+        self.key_values().write_item(w);
     }
 }
 
 impl WriteItem for FrozenChangeProof {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.start_proof().write_item(out);
-        self.end_proof().write_item(out);
-        self.batch_ops().write_item(out);
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        self.start_proof().write_item(w);
+        self.end_proof().write_item(w);
+        self.batch_ops().write_item(w);
     }
 }
 
 impl WriteItem for [BatchOp<Key, Value>] {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.push_var_int(self.len());
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.push_var_int(self.len());
         for item in self {
             match item {
                 BatchOp::Put { key, value } => {
-                    out.push(BATCH_PUT);
-                    key.write_item(out);
-                    value.write_item(out);
+                    w.out.push(BATCH_PUT);
+                    key.write_item(w);
+                    value.write_item(w);
                 }
                 BatchOp::Delete { key } => {
-                    out.push(BATCH_DELETE);
-                    key.write_item(out);
+                    w.out.push(BATCH_DELETE);
+                    key.write_item(w);
                 }
                 BatchOp::DeleteRange { prefix } => {
-                    out.push(BATCH_DELETE_RANGE);
-                    prefix.write_item(out);
+                    w.out.push(BATCH_DELETE_RANGE);
+                    prefix.write_item(w);
                 }
             }
         }
@@ -147,105 +245,117 @@ impl WriteItem for [BatchOp<Key, Value>] {
 }
 
 impl WriteItem for ProofNode {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.key.write_item(out);
-        out.push_var_int(self.partial_len);
-        self.value_digest.write_item(out);
-        ChildMask::from_children(&self.child_hashes).write_item(out);
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        self.key.write_item(w);
+        w.out.push_var_int(self.partial_len);
+        self.value_digest.write_item(w);
+        w.out
+            .extend_from_slice(&self.child_hashes.bitmap().to_le_bytes());
         for (_, child) in self.child_hashes.iter_present() {
-            child.write_item(out);
+            child.write_item(w);
         }
     }
 }
 
 impl WriteItem for PathBuf {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.push_var_int(self.len());
-        out.extend_from_slice(self.as_byte_slice());
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.push_var_int(self.len());
+        w.out.extend_from_slice(self.as_byte_slice());
     }
 }
 
 impl<T: WriteItem> WriteItem for Option<T> {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
         if let Some(v) = self {
-            out.push(1);
-            v.write_item(out);
+            w.out.push(1);
+            v.write_item(w);
         } else {
-            out.push(0);
+            w.out.push(0);
         }
     }
 }
 
 impl<T: WriteItem> WriteItem for [T] {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.push_var_int(self.len());
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.push_var_int(self.len());
         for item in self {
-            item.write_item(out);
+            item.write_item(w);
         }
     }
 }
 
 impl WriteItem for [u8] {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.push_var_int(self.len());
-        out.extend_from_slice(self);
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.push_var_int(self.len());
+        w.out.extend_from_slice(self);
     }
 }
 
 impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        match self.make_hash() {
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        // The value-digest hashing rule (cap large values under MerkleDB,
+        // identity under Ethereum) is selected by the writer's runtime mode.
+        let hashed = self.make_hash(w.node_hash_algorithm());
+        match hashed {
             ValueDigest::Value(v) => {
-                out.push(0);
-                v.write_item(out);
+                w.out.push(0);
+                v.write_item(w);
             }
-            #[cfg(not(feature = "ethhash"))]
+            // Only produced by the merkledb scheme (large values hashed); the
+            // Ethereum scheme never emits a `Hash` digest.
             ValueDigest::Hash(h) => {
-                out.push(1);
-                h.write_item(out);
+                w.out.push(1);
+                h.write_item(w);
             }
         }
     }
 }
 
-impl WriteItem for Header {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(bytemuck::bytes_of(self));
-    }
-}
-
 impl WriteItem for firewood_storage::TrieHash {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_ref());
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.extend_from_slice(self.as_ref());
     }
 }
 
-#[cfg(feature = "ethhash")]
 impl WriteItem for firewood_storage::HashType {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        match self {
-            firewood_storage::HashType::Hash(h) => {
-                out.push(0);
-                h.write_item(out);
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        // The two schemes use different proof wire layouts for a child hash;
+        // dispatch on the writer's runtime algorithm so each format is
+        // preserved byte-for-byte.
+        if w.node_hash_algorithm().is_ethereum() {
+            match self {
+                firewood_storage::HashType::Hash(h) => {
+                    w.out.push(0);
+                    h.write_item(w);
+                }
+                firewood_storage::HashType::Rlp(h) => {
+                    w.out.push(1);
+                    h.write_item(w);
+                }
             }
-            firewood_storage::HashType::Rlp(h) => {
-                out.push(1);
-                h.write_item(out);
+        } else {
+            // MerkleDB child hashes are always a bare 32-byte hash, with no
+            // discriminant byte.
+            match self {
+                firewood_storage::HashType::Hash(h) => h.write_item(w),
+                firewood_storage::HashType::Rlp(_) => {
+                    unreachable!("merkledb child hash is never inline RLP")
+                }
             }
         }
     }
 }
 
 impl WriteItem for ChildMask {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.to_le_bytes());
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
+        w.out.extend_from_slice(&self.to_le_bytes());
     }
 }
 
 impl<K: AsRef<[u8]>, V: AsRef<[u8]>> WriteItem for (K, V) {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, w: &mut ProofWriter<'_>) {
         let (key, value) = self;
-        key.as_ref().write_item(out);
-        value.as_ref().write_item(out);
+        key.as_ref().write_item(w);
+        value.as_ref().write_item(w);
     }
 }

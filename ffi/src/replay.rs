@@ -11,18 +11,28 @@
 //! `firewood-replay` crate's replay engine.
 
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetLatest, KeyValueOp, ProposalId, ProposeOnDB,
-    ProposeOnProposal, ReplayLog,
-};
+use firewood_replay::Batch;
+use firewood_replay::Commit;
+use firewood_replay::DbOperation;
+use firewood_replay::GetFromProposal;
+use firewood_replay::GetLatest;
+use firewood_replay::KeyValueOp;
+use firewood_replay::ProposalId;
+use firewood_replay::ProposeOnDB;
+use firewood_replay::ProposeOnProposal;
+use firewood_replay::ReplayLog;
 use parking_lot::Mutex;
 
-use crate::value::{BatchOp, BorrowedBatchOps, BorrowedBytes};
+use crate::value::BatchOp;
+use crate::value::BorrowedBatchOps;
+use crate::value::BorrowedBytes;
 
 /// Environment variable that controls the output path for the replay log.
 const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";
@@ -298,7 +308,7 @@ pub(crate) fn flush_to_disk() -> io::Result<()> {
     // we don't use recorder() here because flushing should not init
     // the recorder. TestMain opens and closes a db, that causes
     // some tests to fail.
-    // TODO[AMIN]: this should change when we make record db-specific.
+    // TODO(#2414): this should change when we make record db-specific.
     if let Some(Some(rec)) = RECORDER.get() {
         rec.lock().flush_to_disk()
     } else {

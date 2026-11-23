@@ -1,6 +1,6 @@
 [package]
 name = "firewood-macros"
-version = "0.4.0"
+version = "0.7.1"
 edition.workspace = true
 authors = [
      "Ron Kuris <ron.kuris@avalabs.org>",
@@ -18,12 +18,17 @@ proc-macro = true
 # Regular dependencies
 proc-macro2 = "1.0"
 quote = "1.0"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+syn = { version = "3.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 # Workspace dependencies
 firewood-metrics.workspace = true
+test-case.workspace = true
 # Regular dependencies
+# `firewood-storage` depends on this crate, so it publishes after it. Without a
+# version, `cargo publish` strips this dev-dependency rather than requiring the
+# not-yet-published `firewood-storage` release on crates.io.
+firewood-storage = { path = "../storage" }
 trybuild = "1.0"
 
 [lints]

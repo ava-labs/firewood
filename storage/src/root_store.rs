@@ -6,23 +6,40 @@
 //!
 //! It is used only when enabled at database open time.
 
-use firewood_metrics::firewood_counter;
-use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
-use parking_lot::Mutex;
-use std::{
-    path::Path,
-    sync::{Arc, Weak},
-};
-use weak_table::WeakValueHashMap;
+use std::marker::PhantomData;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use derive_where::derive_where;
+use firewood_metrics::firewood_counter;
+use fjall::Config;
+use fjall::Keyspace;
+use fjall::PartitionCreateOptions;
+use fjall::PartitionHandle;
+use fjall::PersistMode;
+use parking_lot::Mutex;
+use weak_table::WeakValueHashMap;
 
+use crate::TrieHash;
+use crate::hashmode::HashMode;
 use crate::linear::filebacked::FileBacked;
-use crate::nodestore::{Committed, LinearAddress, NodeStore};
-use crate::{IntoHashType, TrieHash};
+use crate::nodestore::Committed;
+use crate::nodestore::DeletedNodeTracking;
+use crate::nodestore::LinearAddress;
+use crate::nodestore::NodeStore;
 
 /// Type alias for a committed revision stored in the root store.
-pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+///
+/// `H` is the database's node-hashing scheme; the persisted root addresses are
+/// scheme-independent, so a [`RootStore`] reopens committed revisions under
+/// whichever `H` its owning database uses.
+pub type CommittedRevision<H> = Arc<NodeStore<Committed, FileBacked, H>>;
+
+/// In-memory cache of reopened committed revisions, keyed by root hash and
+/// holding weak references so reaped revisions drop out automatically.
+type RevisionCache<H> =
+    Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked, H>>>>;
 
 /// fjall uses partitions. We store all firewood-specific data in a
 /// partition named 'firewood'
@@ -31,15 +48,18 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 /// This structure holds everything related to an open root store
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct RootStore {
+pub struct RootStore<H> {
     keyspace: Keyspace,
     items: PartitionHandle,
     storage: Arc<FileBacked>,
-    /// Cache of reconstructed revisions by hash.
-    revision_cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
+    /// Cache of reopened committed revisions by hash.
+    revision_cache: RevisionCache<H>,
+    /// Marker for the database's node-hashing scheme. The persisted data is
+    /// scheme-independent; `H` only types the loaded committed revisions.
+    _hash_mode: PhantomData<H>,
 }
 
-impl RootStore {
+impl<H: HashMode> RootStore<H> {
     /// Creates or opens an instance of `RootStore`
     ///
     /// # Arguments
@@ -55,7 +75,7 @@ impl RootStore {
         path: P,
         storage: Arc<FileBacked>,
         truncate: bool,
-    ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
 
         if truncate {
@@ -73,6 +93,7 @@ impl RootStore {
             items,
             storage,
             revision_cache,
+            _hash_mode: PhantomData,
         })
     }
 
@@ -128,7 +149,7 @@ impl RootStore {
     pub fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<CommittedRevision<H>>, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Obtain the lock to prevent multiple threads from caching the same result
         // BLOCKING: mutex lock held for the entire `get` operation, including the fjall read
         // (step 3) and NodeStore construction (step 4) on a cache miss. A cache miss against a
@@ -158,9 +179,12 @@ impl RootStore {
 
         // 4. Construct the committed revision
         let nodestore = Arc::new(NodeStore::with_root(
-            hash.clone().into_hash_type(),
+            hash.clone().into(),
             addr,
             self.storage.clone(),
+            // `RootStore` only exists when the database was opened in
+            // archival mode, where deleted nodes are never tracked.
+            DeletedNodeTracking::Disabled,
         )?);
 
         // 5. Cache for future lookups.
@@ -173,17 +197,22 @@ impl RootStore {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
-    use crate::CacheReadStrategy;
-    use crate::linear::filebacked::FileBacked;
-    use crate::nodestore::{NodeHashAlgorithm, NodeStore};
     use std::num::NonZero;
     use std::sync::Arc;
 
+    use firewood_macros::hash_mode;
+
+    use super::*;
+    use crate::CacheReadStrategy;
+    use crate::EthHash;
+    use crate::MerkleDbHash;
+    use crate::linear::filebacked::FileBacked;
+    use crate::nodestore::NodeStore;
+
+    #[hash_mode]
     #[test]
-    fn test_cache_hit() {
+    fn test_cache_hit<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -195,16 +224,20 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
+        let root_store: RootStore<H> =
+            RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
-        // Create a revision to cache.
-        let revision = Arc::new(NodeStore::new_empty_committed(file_backed.clone()));
+        // Create a revision to cache. `RootStore` implies archival mode,
+        // where deleted nodes are never tracked.
+        let revision: CommittedRevision<H> = Arc::new(NodeStore::new_empty_committed(
+            file_backed.clone(),
+            DeletedNodeTracking::Disabled,
+        ));
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store
@@ -219,8 +252,9 @@ mod tests {
         assert!(Arc::ptr_eq(&revision, &retrieved_revision));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_nonexistent_revision() {
+    fn test_nonexistent_revision<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -232,13 +266,13 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
+        let root_store: RootStore<H> =
+            RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
         let nonexistent_hash = TrieHash::from_bytes([1; 32]);

@@ -1,6 +1,6 @@
 [package]
 name = "firewood-benchmark"
-version = "0.4.0"
+version = "0.7.1"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -35,18 +35,22 @@ rand.workspace = true
 rand_distr.workspace = true
 sha2.workspace = true
 # Regular dependencies
-fastrace-opentelemetry = { version = "0.16.0" }
-metrics-exporter-prometheus = { workspace = true, optional = true, features = ["http-listener"] }
-opentelemetry = "=0.31.0"
-opentelemetry-otlp = { version = "=0.31.0", features = ["grpc-tonic"] }
-opentelemetry-proto = "=0.31.0"
-opentelemetry_sdk = "=0.31.0"
+metrics-exporter-prometheus = { version = "0.18.3", optional = true, default-features = false, features = ["http-listener"] }
 pretty-duration = "0.1.1"
-tikv-jemallocator = "0.6.1"
+tikv-jemallocator = "0.7.0"
+
+# NOTE: fastrace-opentelemetry often lags behind opentelemetry. They are both
+# pinned to prevent version mismatches. Bump together when `cargo upgrade -v`
+# reports that fastrace-opentelemetry is out of date.
+fastrace-opentelemetry = { version = "=0.19" }
+opentelemetry = "=0.33"
+opentelemetry-otlp = { version = "=0.33", features = ["grpc-tonic"] }
+opentelemetry-proto = "=0.33"
+opentelemetry_sdk = "=0.33"
 
 [dependencies.tokio]
 optional = true
-version = "1.52.3"
+version = "1.54.1"
 features = ["mio", "net", "parking_lot", "rt", "time"]
 
 [features]

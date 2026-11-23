@@ -231,7 +231,10 @@ func (b *ownedBytes) intoError() error {
 	err := errors.New(string(b.CopiedBytes()))
 
 	if err2 := b.Free(); err2 != nil {
-		return fmt.Errorf("%w: %w (original error: %w)", errFreeingValue, err, err2)
+		// err is the payload error; err2 is the free failure. Joining
+		// preserves errors.Is matching against both errFreeingValue and
+		// the underlying payload error for callers.
+		return errors.Join(err, errFreeingValue, err2)
 	}
 
 	return err
@@ -451,14 +454,23 @@ func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBat
 	}
 }
 
+// untaggedDBTag is the db_tag of a database opened without [WithMetricsTag].
+// It mirrors DEFAULT_DB_TAG in the firewood-metrics crate, which the Rust
+// recorder applies to the same databases; change both together.
+const untaggedDBTag = "untagged"
+
 // getDatabaseFromHandleResult converts a C.HandleResult to a Database or error.
 //
 // If the C.HandleResult is an error, it returns an error instead of a Database.
-func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
+func getDatabaseFromHandleResult(result C.HandleResult, metricsTag string) (*Database, error) {
 	switch result.tag {
 	case C.HandleResult_Ok:
 		ptr := *(**C.DatabaseHandle)(unsafe.Pointer(&result.anon0))
-		db := &Database{handle: ptr}
+		db := &Database{
+			handle:     ptr,
+			keepAlives: newKeepAliveRegistry(),
+			metricsTag: metricsTag,
+		}
 		return db, nil
 	case C.HandleResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()

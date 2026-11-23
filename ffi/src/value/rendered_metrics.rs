@@ -1,10 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use metrics_exporter_prometheus::render;
+use metrics_collector_prometheus::snapshot as render;
 
 use super::Maybe;
-use super::owned::{OwnedBytes, OwnedSlice};
+use super::owned::OwnedBytes;
+use super::owned::OwnedSlice;
 
 pub(crate) trait MapIntoCollection<T>: IntoIterator {
     fn map_into<U, I>(self) -> I

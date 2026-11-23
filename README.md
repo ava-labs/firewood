@@ -26,7 +26,7 @@ To do this, a new root is always created for each revision that can reference ei
 When creating a revision,
 a list of nodes that are no longer needed are computed and saved to disk in a future-delete log (FDL) as well as kept in memory.
 When a revision expires, the nodes that were deleted when it was created are returned to the free space.
-Firewood also supports archival mode via `RootStore`, which retains all historical revisions and allows lookup of any past state by its root hash.
+Firewood also supports archival mode via `RootStore`, which retains persisted historical revisions for lookup by root hash.
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
@@ -39,11 +39,16 @@ as well as carefully managing the free list during the creation and expiration o
 
 ## Architecture Diagram
 
-![architecture diagram](./docs/assets/architecture.svg)
+![architecture diagram](./docs/src/assets/architecture.svg)
 
 ## Terminology
 
-- `Revision` - A historical point-in-time state/version of the trie. This
+- `Commit` - Makes a proposal's state the latest committed state. Success does
+  not guarantee that the state has been persisted.
+- `Persist` - Writes committed state to the database files.
+- `Maximum persistence gap` - The maximum number of committed revisions that
+  can be ahead of the last persisted revision.
+- `Revision` - A point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.
 - `View` - A read-only interface into a `Revision`, `Proposal`, or
@@ -55,7 +60,8 @@ as well as carefully managing the free list during the creation and expiration o
 - `Key` - Represents an individual byte array used to index into a trie. A `Key`
   usually has a specific `Value`.
 - `Value` - Represents a byte array for the value of a specific `Key`. Values can
-  contain 0-N bytes. In particular, a zero-length `Value` is valid.
+  contain 0-N bytes. A zero-length `Value` is valid under merkledb hashing. The
+  Ethereum hash scheme rejects it on write.
 - `Key Proof` - A proof that a `Key` exists within a specific revision of a trie.
   This includes the hash for the node containing the `Key` as well as all parents.
 - `Range Proof` - A proof that consists of two `Key Proof`s, one for the start of
@@ -73,16 +79,14 @@ as well as carefully managing the free list during the creation and expiration o
 - `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
   yet committed to the trie. In Firewood's most recent API, a `Proposal` is required
   to `Commit`.
-- `Reconstructed` - A reconstructed state consists of a base historical state and a
+- `Reconstructed` - A reconstructed state consists of a `Reconstructible` base state and a
   `Batch` applied in-memory.
   - It is read-only.
   - It cannot be committed.
   - It differs from a `Proposal` because reconstructed states are not tracked as
     uncommitted branches and do not participate in proposal-parent branching.
-- `Reconstructible` - Either a `Historical` or `Reconstructed` state, which supports
+- `Reconstructible` - Either a `Committed` or `Reconstructed` state, which supports
   building new `Reconstructed` states by applying a `Batch`.
-- `Commit` - The operation of applying one or more `Proposal`s to the most recent
-  `Revision`.
 
 ## Metrics
 
@@ -117,19 +121,25 @@ In order to build firewood, the following dependencies must be installed:
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
 
+Firewood builds and tests on stable Rust. `rust-toolchain.toml` pins a nightly
+for `cargo fmt`, clippy, and miri only, which rustup installs on first use. Use
+the `just` recipes in [CONTRIBUTING.md](CONTRIBUTING.md) to build and test so
+the right channel is selected for each task.
+
 More detailed build instructions, including some scripts,
-can be found in the [benchmark setup scripts](benchmark/setup-scripts).
+can be found in the [benchmark setup scripts](fwdctl/launch/setup-scripts).
 
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
 
 ## Ethereum compatibility
 
-By default, Firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),
-and does not support accounts.
-To enable this feature (at the cost of some performance) enable the ethhash [feature flag](https://doc.rust-lang.org/cargo/reference/features.html#command-line-feature-options).
+Firewood's node hash scheme is a runtime, per-database choice; selecting the desired node hash algorithm is done
+when opening the database. The MerkleDB algorithm produces hashes compatible with
+[merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb), which does
+not support accounts.
 
-Enabling this feature
+Selecting the Ethereum-compatible algorithm (at the cost of some performance)
 changes the hashing algorithm from [sha256](https://docs.rs/sha2/latest/sha2/type.Sha256.html)
 to [keccak256](https://docs.rs/sha3/latest/sha3/type.Keccak256.html),
 understands that an "account" is actually just a node in the storage tree at a specific depth with a specific RLP-encoded value,
@@ -139,7 +149,7 @@ It is worth noting that the hash stored as a value inside the account root RLP i
 During hash calculations, we know the hash of the children,
 and use that directly to modify the value in-place
 when hashing the node.
-See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
+See [replace\_hash](storage/src/hashers/ethhash.rs) for more details.
 
 ## Run
 
@@ -175,8 +185,10 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo nextest --release
+./scripts/run-just.sh test
 ```
+
+This runs every portable test profile on stable.
 
 ## License
 

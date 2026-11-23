@@ -19,7 +19,10 @@
 //!
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
-use std::fmt::{Display, Formatter, LowerHex, Result};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::LowerHex;
+use std::fmt::Result;
 use std::ops::Range;
 
 mod arc_swap_triomphe;
@@ -27,6 +30,7 @@ mod checker;
 mod hashednode;
 mod hashedshunt;
 mod hashers;
+mod hashmode;
 mod hashtype;
 mod iter;
 mod linear;
@@ -34,15 +38,18 @@ mod node;
 mod nodestore;
 mod path;
 mod root_store;
+mod stack;
+pub use stack::ensure_stack;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
+mod trie_hash;
 mod tries;
 mod u4;
 
 /// Logger module for handling logging functionality
 pub mod logger;
 
-/// Ethereum MPT path encoding primitives shared by the ethhash hasher and the
+/// Ethereum MPT path encoding primitives shared by the Ethereum hasher and the
 /// `eth_getProof`-compatible proof emitter.
 pub mod eth_encoding;
 
@@ -56,40 +63,110 @@ pub mod macros;
 /// Metrics registry for storage layer metrics
 pub mod registry;
 // re-export these so callers don't need to know where they are
-pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use checker::CheckOpt;
+pub use checker::CheckerReport;
+pub use checker::DBStats;
+pub use checker::FreeListsStats;
+pub use checker::TrieStats;
+pub use hashednode::Hashable;
+pub use hashednode::ValueDigest;
+pub use hashednode::hash_node;
+pub use hashednode::hash_preimage;
 pub use hashedshunt::HashableShunt;
-pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
-pub use linear::{FileIoError, ReadableStorage, WritableStorage};
-pub use node::path::{NibblesIterator, Path};
-pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
-pub use nodestore::fix_account_storage_root_value;
-pub use nodestore::{
-    AreaIndex, Committed, CommittedId, CommittedParentHash, HashedNodeReader, ImmutableProposal,
-    LinearAddress, Mutable, MutableKind, NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError,
-    NodeReader, NodeStore, NodeStoreHeader, Parentable, Propose, Recon, Reconstructed,
-    ReconstructionSource, RootReader, TrieReader,
-};
-pub use path::{
-    ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
-    PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
-    SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
-};
-pub use tries::{
-    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
-    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
-};
-pub use u4::{TryFromIntError, U4};
-
+pub use hashmode::EthHash;
+pub use hashmode::HashMode;
+pub use hashmode::MerkleDbHash;
+pub use hashtype::HashType;
+pub use linear::FileIoError;
+pub use linear::ReadableStorage;
+pub use linear::WritableStorage;
+pub use linear::filebacked::FREE_LIST_CACHE_ENTRY_SIZE;
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
+pub use node::BranchNode;
+pub use node::Child;
+pub use node::Children;
+pub use node::ChildrenSlots;
+pub use node::DenseChildren;
+pub use node::LeafNode;
+pub use node::Node;
+pub use node::PathIterItem;
+pub use node::path::NibblesIterator;
+pub use node::path::Path;
 pub use node::persist::MaybePersistedNode;
-pub use rlp::{NULL_RLP, RlpError, RlpItem, RlpList, encode_list, replace_list_field};
+pub use nodestore::AreaIndex;
+pub use nodestore::CargoVersion;
+pub use nodestore::Committed;
+pub use nodestore::CommittedId;
+pub use nodestore::CommittedParentHash;
+pub use nodestore::DeletedNodeTracking;
+pub use nodestore::GitDescribe;
+pub use nodestore::HashedNodeReader;
+pub use nodestore::ImmutableProposal;
+pub use nodestore::LinearAddress;
+pub use nodestore::Mutable;
+pub use nodestore::MutableKind;
+pub use nodestore::MutableReconNodeStore;
+pub use nodestore::NodeHashAlgorithm;
+pub use nodestore::NodeHashAlgorithmTryFromIntError;
+pub use nodestore::NodeReader;
+pub use nodestore::NodeStore;
+pub use nodestore::NodeStoreHeader;
+pub use nodestore::Parentable;
+pub use nodestore::Propose;
+pub use nodestore::Recon;
+pub use nodestore::Reconstructed;
+pub use nodestore::ReconstructionSource;
+pub use nodestore::RootReader;
+pub use nodestore::TrieReader;
+pub use nodestore::fix_account_storage_root_value;
+pub use nodestore::hash_node_as_storage_trie_root_for_node;
+pub use nodestore::hash_node_as_storage_trie_root_parts;
+pub use path::ComponentIter;
+pub use path::IntoSplitPath;
+pub use path::JoinedPath;
+pub use path::PackedBytes;
+pub use path::PackedPathComponents;
+pub use path::PackedPathRef;
+pub use path::PartialPath;
+pub use path::PathBuf;
+pub use path::PathCommonPrefix;
+pub use path::PathComponent;
+pub use path::PathComponentSliceExt;
+pub use path::PathGuard;
+pub use path::SplitPath;
+pub use path::TriePath;
+pub use path::TriePathAsPackedBytes;
+pub use path::TriePathFromPackedBytes;
+pub use path::TriePathFromUnpackedBytes;
+pub use path::prefix_upper_bound;
+pub use rlp::NULL_RLP;
+pub use rlp::RlpError;
+pub use rlp::RlpItem;
+pub use rlp::RlpList;
+pub use rlp::encode_list;
+pub use rlp::parse_be_uint;
+pub use rlp::parse_fixed;
+pub use rlp::replace_list_field;
 pub use root_store::RootStore;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::TestRecorder;
+pub use trie_hash::InvalidTrieHashLength;
+pub use trie_hash::TrieHash;
+pub use tries::DuplicateKeyError;
+pub use tries::HashedKeyValueTrieRoot;
+pub use tries::HashedTrieNode;
+pub use tries::IterAscending;
+pub use tries::IterDescending;
+pub use tries::KeyValueTrieRoot;
+pub use tries::TrieEdgeIter;
+pub use tries::TrieEdgeState;
+pub use tries::TrieNode;
+pub use tries::TrieValueIter;
+pub use u4::TryFromIntError;
+pub use u4::U4;
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -153,7 +230,8 @@ impl CachedNode {
     /// The `current_size()` and `max_size()` methods are simple field accesses,
     /// so this is very cheap to call frequently.
     pub(crate) fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
-        use firewood_metrics::{GaugeExt, firewood_gauge};
+        use firewood_metrics::GaugeExt;
+        use firewood_metrics::firewood_gauge;
         firewood_gauge!(CACHE_MEMORY_USED).set_integer(cache.current_size());
         firewood_gauge!(CACHE_MEMORY_LIMIT).set_integer(cache.max_size());
     }
@@ -371,8 +449,8 @@ pub enum CheckerError {
         "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
     )]
     /// A value is found corresponding to an invalid key.
-    /// With ethhash, keys must be 32 or 64 bytes long.
-    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    /// Under Ethereum hashing, keys must be 32 or 64 bytes long.
+    /// Under MerkleDB hashing, keys cannot contain half-bytes (i.e., odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
         key: Path,
@@ -425,22 +503,23 @@ impl From<CheckerError> for Vec<CheckerError> {
 /// least one byte is present and will produce a spurious ` val=` prefix
 /// for empty input.
 ///
-/// With ethhash enabled, values that look like non-empty RLP lists (first
-/// byte >= 0xc0) are decoded and displayed as ` rlp=[field0,field1,...]`
-/// with hex-encoded fields truncated to 12 characters. If the value cannot
-/// be decoded as an RLP list, the raw bytes are dumped instead. Other values
-/// are displayed as plaintext (` val=...`) if they are alphanumeric UTF-8,
-/// or as truncated hex otherwise.
+/// When the database uses Ethereum hashing, values that look like non-empty
+/// RLP lists (first byte >= 0xc0) are decoded and displayed as
+/// ` rlp=[field0,field1,...]` with hex-encoded fields truncated to 12
+/// characters. If the value cannot be decoded as an RLP list, the raw bytes
+/// are dumped instead. Other values are displayed as plaintext (` val=...`) if
+/// they are alphanumeric UTF-8, or as truncated hex otherwise.
 ///
 /// # Errors
 ///
 /// Returns an error if writing to `writer` fails.
 pub fn format_node_value<W: std::io::Write + ?Sized>(
     value: &[u8],
+    algorithm: crate::NodeHashAlgorithm,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    #[cfg(feature = "ethhash")]
-    if value.first().is_some_and(|&b| b >= 0xc0)
+    if algorithm.is_ethereum()
+        && value.first().is_some_and(|&b| b >= 0xc0)
         && let Ok(rlp_list) = crate::rlp::RlpList::parse(value)
         && let Ok(items) = rlp_list.fields()
         && !items.is_empty()
@@ -478,61 +557,73 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod format_node_value_tests {
+    use firewood_macros::hash_mode;
+
     use super::*;
 
-    fn fmt(value: &[u8]) -> String {
+    fn fmt(value: &[u8], algorithm: NodeHashAlgorithm) -> String {
         let mut buf = Vec::new();
-        format_node_value(value, &mut buf).unwrap();
+        format_node_value(value, algorithm, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
+    #[hash_mode]
     #[test]
-    fn alphanumeric_plaintext() {
-        assert_eq!(fmt(b"hello"), " val=hello");
-        assert_eq!(fmt(b"value1"), " val=value1");
+    fn alphanumeric_plaintext<H: crate::HashMode>() {
+        assert_eq!(fmt(b"hello", H::ALGORITHM), " val=hello");
+        assert_eq!(fmt(b"value1", H::ALGORITHM), " val=value1");
     }
 
+    #[hash_mode]
     #[test]
-    fn long_alphanumeric_truncated() {
-        assert_eq!(fmt(b"longvalue"), " val=longva...");
+    fn long_alphanumeric_truncated<H: crate::HashMode>() {
+        assert_eq!(fmt(b"longvalue", H::ALGORITHM), " val=longva...");
     }
 
+    #[hash_mode]
     #[test]
-    fn non_utf8_as_hex() {
-        assert_eq!(fmt(&[0xff, 0xfe]), " val=fffe");
+    fn non_utf8_as_hex<H: crate::HashMode>() {
+        assert_eq!(fmt(&[0xff, 0xfe], H::ALGORITHM), " val=fffe");
     }
 
+    #[hash_mode]
     #[test]
-    fn long_hex_truncated() {
-        assert_eq!(fmt(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
+    fn long_hex_truncated<H: crate::HashMode>() {
+        assert_eq!(
+            fmt(&[0xde, 0xad, 0xbe, 0xef], H::ALGORITHM),
+            " val=deadbe..."
+        );
     }
 
+    #[hash_mode]
     #[test]
-    fn non_alphanumeric_utf8_as_hex() {
+    fn non_alphanumeric_utf8_as_hex<H: crate::HashMode>() {
         // Space is not alphanumeric, so falls through to hex.
-        assert_eq!(fmt(b"hi there"), " val=686920...");
+        assert_eq!(fmt(b"hi there", H::ALGORITHM), " val=686920...");
     }
 
-    #[cfg(feature = "ethhash")]
+    /// Uses Ethereum hashing because nonempty RLP lists render as structured
+    /// value fields instead of hexadecimal values.
     #[test]
-    fn rlp_list_decoded() {
+    fn rlp_list_decoded_ethhash() {
         use ::rlp::RlpStream;
+
         // RLP encode [0x01, 0x02] as a 2-item list.
         let mut rlp = RlpStream::new_list(2);
         rlp.append(&vec![0x01u8]);
         rlp.append(&vec![0x02u8]);
         let encoded = rlp.out();
-        assert_eq!(fmt(&encoded), " rlp=[01,02]");
+        assert_eq!(fmt(&encoded, EthHash::ALGORITHM), " rlp=[01,02]");
     }
 
-    #[cfg(feature = "ethhash")]
+    /// Uses Ethereum hashing because an empty RLP list has no fields, so it
+    /// falls back to hexadecimal value formatting.
     #[test]
-    fn empty_rlp_list_falls_through() {
+    fn empty_rlp_list_falls_through_ethhash() {
         // 0xc0 is an empty RLP list — as_list returns Ok([]) which we
         // treat as non-RLP since there are no fields to display.
-        let result = fmt(&[0xc0]);
+        let result = fmt(&[0xc0], EthHash::ALGORITHM);
         assert!(
             result.starts_with(" val="),
             "expected hex fallback, got: {result}"

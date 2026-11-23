@@ -2,11 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::fmt;
-
-use firewood::api::{self, ArcDynDbView, BoxKeyValueIter};
-use firewood::{Key, Value};
-use firewood_metrics::MetricsContext;
 use std::iter::FusedIterator;
+
+use firewood::Key;
+use firewood::Value;
+use firewood::api;
+use firewood::api::ArcDynDbView;
+use firewood::api::BoxKeyValueIter;
+use firewood_metrics::MetricsContext;
 
 type KeyValueItem = (Key, Value);
 
@@ -71,6 +74,6 @@ pub struct CreateIteratorResult<'db>(pub IteratorHandle<'db>);
 
 impl crate::MetricsContextExt for IteratorHandle<'_> {
     fn metrics_context(&self) -> Option<MetricsContext> {
-        self.metrics_context
+        self.metrics_context.clone()
     }
 }

@@ -9,10 +9,27 @@
 
 use super::*;
 
+fn verify_change_proof_structure(
+    proof: &FrozenChangeProof,
+    end_root: HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    max_length: Option<NonZeroUsize>,
+) -> Result<ChangeProofVerificationContext, api::Error> {
+    super::verify_change_proof_structure(
+        proof,
+        end_root,
+        start_key,
+        end_key,
+        EthHash::ALGORITHM,
+        max_length,
+    )
+}
+
 /// Empty start trie, single key inserted. Complete proof (no bounds).
 #[test]
 fn test_empty_start_trie_single_key_no_bounds() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(db, [(b"\x50", b"hello")]);
 
     let proof = db
@@ -20,7 +37,7 @@ fn test_empty_start_trie_single_key_no_bounds() {
         .unwrap();
     let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -30,7 +47,7 @@ fn test_empty_start_trie_single_key_no_bounds() {
 /// start proof (`start_key` exists in end trie).
 #[test]
 fn test_empty_start_trie_bounded_inclusion() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         db,
         [
@@ -54,7 +71,7 @@ fn test_empty_start_trie_bounded_inclusion() {
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
             .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -64,7 +81,7 @@ fn test_empty_start_trie_bounded_inclusion() {
 /// (`start_key` does NOT exist in end trie).
 #[test]
 fn test_empty_start_trie_bounded_exclusion() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) =
         setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b"), (b"\x30", b"c")]);
 
@@ -81,7 +98,7 @@ fn test_empty_start_trie_bounded_exclusion() {
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x05"), Some(b"\x30"), None)
             .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -93,7 +110,7 @@ fn test_empty_start_trie_bounded_exclusion() {
 /// which places a value on the root node itself.
 #[test]
 fn test_empty_start_trie_prefix_keys() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         db,
         [
@@ -105,7 +122,7 @@ fn test_empty_start_trie_prefix_keys() {
         ]
     );
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     // Range [\x10\x50, \x20]: start_key \x10\x50 exists (inclusion).

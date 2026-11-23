@@ -15,14 +15,15 @@
 //! `build.rs`.
 
 use std::fmt;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
+use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 // See build.rs for how this is generated
 include!(concat!(env!("OUT_DIR"), "/area_sizes.rs"));
 
 /// Returns an iterator over all valid area sizes.
-// TODO: return a named iterator
+// TODO(rkuris): return a named iterator
 pub(crate) fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
     AREA_SIZES
         .iter()
@@ -107,13 +108,6 @@ impl AreaIndex {
         self.0 as usize
     }
 
-    /// Returns the number of different area sizes available.
-    #[inline]
-    #[must_use]
-    pub const fn num_area_sizes() -> usize {
-        Self::NUM_AREA_SIZES
-    }
-
     /// Create an `AreaIndex` from a u8 value without bounds checking.
     #[inline]
     #[must_use]
@@ -123,10 +117,6 @@ impl AreaIndex {
     }
 
     /// Get the size of an area index (used by the checker)
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index` is out of bounds for the `AREA_SIZES` array.
     #[must_use]
     pub const fn size(self) -> u64 {
         #[expect(clippy::indexing_slicing)]
@@ -157,13 +147,16 @@ impl TryFrom<usize> for AreaIndex {
     type Error = Error;
 
     fn try_from(index: usize) -> Result<Self, Self::Error> {
-        let index_u8: Result<u8, _> = index.try_into();
-        index_u8.map(AreaIndex).map_err(|_| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Area index out of bounds: {index}"),
-            )
-        })
+        index
+            .try_into()
+            .ok()
+            .and_then(AreaIndex::new)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Area index out of bounds: {index}"),
+                )
+            })
     }
 }
 
@@ -235,25 +228,10 @@ impl LinearAddress {
     /// The minimum area size available for allocation.
     pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().unwrap();
 
-    /// Returns the number of different area sizes available.
-    #[inline]
-    #[must_use]
-    pub const fn num_area_sizes() -> usize {
-        const { AREA_SIZES.len() }
-    }
-
-    /// Returns the inner `NonZeroU64`
-    #[inline]
-    #[must_use]
-    pub const fn into_nonzero(self) -> NonZeroU64 {
-        self.0
-    }
-
     /// Advances a `LinearAddress` by `n` bytes.
     ///
     /// Returns `None` if the result overflows a u64
     /// Some(LinearAddress) otherwise
-    ///
     #[inline]
     #[must_use]
     pub const fn advance(self, n: u64) -> Option<Self> {
@@ -308,10 +286,11 @@ impl From<NonZeroU64> for LinearAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use sha2::Digest;
+    use sha2::Sha256;
 
+    use super::*;
     use crate::TrieHash;
-    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_area_size_hash_matches_old_calculation() {
@@ -322,5 +301,11 @@ mod tests {
         let hash: TrieHash = hasher.finalize().into();
 
         assert_eq!(AREA_SIZES_HASH, *hash);
+    }
+
+    #[test]
+    fn test_area_index_try_from_usize_out_of_bounds() {
+        assert!(AreaIndex::try_from(AreaIndex::NUM_AREA_SIZES).is_err());
+        assert!(AreaIndex::try_from(usize::MAX).is_err());
     }
 }
