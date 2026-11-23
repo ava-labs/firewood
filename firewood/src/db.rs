@@ -822,6 +822,30 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
     }
 }
 
+/// Under the Ethereum scheme the hasher writes each account's storage root
+/// into its stored value, so a proposal that only touched an account's storage
+/// diffs against its old parent as a `Put` of the whole account. Replaying that
+/// `Put` on a newer revision would restore the old parent's nonce, balance and
+/// code hash. Such a `Put` is dropped when the newer revision still holds the
+/// account, since rehashing recomputes the storage root anyway.
+fn only_storage_root_changed<A: TrieReader, B: TrieReader>(
+    old: &Merkle<A>,
+    current: &Merkle<B>,
+    op: &BatchOp<crate::merkle::Key, crate::merkle::Value>,
+) -> Result<bool, FileIoError> {
+    let BatchOp::Put { key, value } = op else {
+        return Ok(false);
+    };
+    if key.len() != 32 || current.get_value(key)?.is_none() {
+        return Ok(false);
+    }
+    let Some(old_value) = old.get_value(key)? else {
+        return Ok(false);
+    };
+    let masked = |v: &[u8]| firewood_storage::replace_list_field(v, 2, &[0u8; 32]).ok();
+    Ok(masked(value).is_some_and(|new| Some(new) == masked(&old_value)))
+}
+
 impl<H: HashMode> Proposal<'_, H> {
     /// Commit the proposal, automatically rebasing if the parent revision
     /// is no longer the latest.
@@ -872,8 +896,19 @@ impl<H: HashMode> Proposal<'_, H> {
                     &empty_parent
                 };
             let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
-            let batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
+            let mut batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
                 diff.collect::<Result<_, _>>()?;
+            if H::ALGORITHM.is_ethereum() {
+                let old = Merkle::from(old_parent_ref);
+                let current = Merkle::from(&**current);
+                let mut keep = Vec::with_capacity(batch_ops.len());
+                for op in batch_ops {
+                    if !only_storage_root_changed(&old, &current, &op)? {
+                        keep.push(op);
+                    }
+                }
+                batch_ops = keep;
+            }
 
             let new_proposal = db.propose_with_parent(batch_ops, &**current)?;
             nodestore = new_proposal.nodestore;
