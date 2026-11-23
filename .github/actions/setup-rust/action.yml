@@ -1,0 +1,90 @@
+name: Set up Rust
+description: >-
+  Check out the repository, install `just` and any extra tools, install a Rust
+  toolchain, and restore the Swatinem/rust-cache build cache.
+
+# Reference this action as `$/.github/actions/setup-rust`. The `$/` form
+# resolves at the running commit without a prior checkout, which lets this
+# action perform the checkout itself.
+#
+# This action does not set RUSTUP_TOOLCHAIN. Jobs that build on stable still
+# set it in their `env:` block, because rust-toolchain.toml outranks the
+# toolchain this action installs. See AGENTS.md, "Toolchain Selection".
+
+inputs:
+  checkout-ref:
+    description: The ref to check out. Empty checks out the event's default ref.
+    default: ""
+  tools:
+    description: >-
+      Comma-separated taiki-e/install-action tools to install alongside
+      `just`, such as `nextest`.
+    default: ""
+  toolchain:
+    description: >-
+      The Rust toolchain to install. `pinned` installs the toolchain and
+      components from rust-toolchain.toml. `none` installs no toolchain and
+      skips the cache. Any other value is passed to dtolnay/rust-toolchain.
+    default: stable
+  components:
+    description: >-
+      Comma-separated rustup components to add to the toolchain. Ignored for
+      the `none` toolchain.
+    default: ""
+  targets:
+    description: >-
+      Comma-separated rustup targets to add to the toolchain. Ignored for the
+      `pinned` and `none` toolchains.
+    default: ""
+  cache:
+    description: Whether to restore the Swatinem/rust-cache build cache.
+    default: "true"
+  cache-key:
+    description: >-
+      The rust-cache `shared-key`. Jobs that share a key share a cache, so
+      match the key of the job that writes it.
+    default: ""
+  cache-save:
+    description: >-
+      Whether to save the cache at the end of the job. Only the job that warms
+      a key should save it; readers skip the expensive upload.
+    default: "false"
+  cache-all-crates:
+    description: >-
+      Whether to cache every crate, including workspace crates, rather than
+      only dependencies. Set this on the jobs that warm a shared key.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.checkout-ref }}
+    - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      with:
+        tool: just@1.46.0${{ inputs.tools && format(',{0}', inputs.tools) || '' }}
+    - if: inputs.toolchain == 'pinned'
+      name: Install the rust-toolchain.toml toolchain
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        rustup toolchain install
+        if [[ -n "$COMPONENTS" ]]; then
+          IFS=, read -ra components <<<"$COMPONENTS"
+          rustup component add "${components[@]}"
+        fi
+    - if: inputs.toolchain != 'pinned' && inputs.toolchain != 'none'
+      uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+    - if: inputs.cache == 'true' && inputs.toolchain != 'none'
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        shared-key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.cache-save }}
+        cache-all-crates: ${{ inputs.cache-all-crates }}
+        cache-workspace-crates: ${{ inputs.cache-all-crates }}

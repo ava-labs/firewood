@@ -9,18 +9,21 @@
 use std::error::Error;
 use std::time::Instant;
 
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db};
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::BatchOp;
 use firewood::logger::debug;
+use sha2::Digest;
+use sha2::Sha256;
 
-use crate::{Args, TestRunner};
-use sha2::{Digest, Sha256};
+use crate::Args;
+use crate::TestRunner;
 
 #[derive(Clone, Default)]
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &dyn DynDb, args: &Args) -> Result<(), Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
         let twenty_five_pct = args.global_opts.batch_size / 4;
@@ -32,7 +35,9 @@ impl TestRunner for TenKRandom {
                 .chain(generate_deletes(low, twenty_five_pct))
                 .chain(generate_updates(low + high / 2, twenty_five_pct * 2, low))
                 .collect();
-            let proposal = db.propose(batch).expect("proposal should succeed");
+            let proposal = db
+                .propose(api::collect_owned_batch(batch)?)
+                .expect("proposal should succeed");
             proposal.commit()?;
             low += twenty_five_pct;
             high += twenty_five_pct;

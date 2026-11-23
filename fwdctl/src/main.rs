@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
+use clap::Subcommand;
 use firewood::api;
 
 pub mod check;
@@ -14,38 +15,13 @@ pub mod delete;
 pub mod dump;
 pub mod get;
 pub mod graph;
+pub mod import;
 pub mod insert;
+pub mod key;
 #[cfg(feature = "launch")]
 pub mod launch;
 pub mod replay;
 pub mod root;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
-pub enum NodeHashAlgorithm {
-    #[value(name = "merkle-db")]
-    MerkleDB,
-    #[value(name = "ethereum")]
-    Ethereum,
-}
-
-impl Default for NodeHashAlgorithm {
-    fn default() -> Self {
-        if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        }
-    }
-}
-
-impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
-    fn from(algorithm: NodeHashAlgorithm) -> Self {
-        match algorithm {
-            NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
-            NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Parser)]
 pub struct DatabasePath {
@@ -59,22 +35,30 @@ pub struct DatabasePath {
         help = "Name of the database directory"
     )]
     pub dbpath: PathBuf,
+}
 
-    /// The node hash algorithm to use when opening the database.
-    #[arg(
-        long,
-        value_enum,
-        required = false,
-        default_value_t = NodeHashAlgorithm::default(),
-        help = "The node hash algorithm to use when opening the database",
-    )]
-    pub node_hash_algorithm: NodeHashAlgorithm,
+impl DatabasePath {
+    /// Reads the node-hashing scheme from the existing database header.
+    ///
+    /// All commands other than `create` require a database to exist so its
+    /// persisted scheme remains the single source of truth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database file or its header cannot be read.
+    pub(crate) fn node_hash_algorithm(
+        &self,
+    ) -> Result<firewood_storage::NodeHashAlgorithm, firewood_storage::FileIoError> {
+        firewood_storage::NodeStoreHeader::read_node_hash_algorithm_from_file(
+            self.dbpath.join("firewood.db"),
+        )
+    }
 }
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
-#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ", ", env!("ETHHASH_FEATURE"), ")"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -101,6 +85,8 @@ enum Commands {
     Get(get::Options),
     /// Delete values associated with a key
     Delete(delete::Options),
+    /// Restore database from a dump file
+    Import(import::Options),
     /// Display key/value trie root hash
     Root(root::Options),
     /// Dump contents of key/value store
@@ -128,6 +114,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Insert(opts) => insert::run(opts),
         Commands::Get(opts) => get::run(opts),
         Commands::Delete(opts) => delete::run(opts),
+        Commands::Import(opts) => import::run(opts),
         Commands::Root(opts) => root::run(opts),
         Commands::Dump(opts) => dump::run(opts),
         Commands::Graph(opts) => graph::run(opts),

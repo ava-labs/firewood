@@ -1,19 +1,37 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::IntoBatchIter;
-use crate::db::BatchOp;
-use crate::merkle::{Key, Merkle, Value};
-use firewood_metrics::{current_metrics_context, set_metrics_context};
-use firewood_storage::logger::error;
-use firewood_storage::{
-    BranchNode, Child, Children, FileBacked, FileIoError, LeafNode, MaybePersistedNode, Mutable,
-    NibblesIterator, Node, NodeStore, Path, PathComponent, Propose,
-};
-use rayon::ThreadPool;
 use std::iter::once;
 use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, SendError, Sender};
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::SendError;
+use std::sync::mpsc::Sender;
+
+use firewood_metrics::current_metrics_context;
+use firewood_metrics::set_metrics_context;
+use firewood_storage::BranchNode;
+use firewood_storage::Child;
+use firewood_storage::Children;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::LeafNode;
+use firewood_storage::MaybePersistedNode;
+use firewood_storage::Mutable;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeStore;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
+use firewood_storage::logger::error;
+use rayon::ThreadPool;
+
+use crate::api::IntoBatchIter;
+use crate::db::BatchOp;
+use crate::merkle::Key;
+use crate::merkle::Merkle;
+use crate::merkle::Value;
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
@@ -40,6 +58,8 @@ pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
     InvalidConversionToPathComponent,
+    KeyTooLong { len: usize, max: usize },
+    EmptyValue,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -66,9 +86,9 @@ impl ParallelMerkle {
     /// Force the root (if necessary) into a branch with no partial path to allow the clean
     /// separation of the trie into an array of subtries that can be operated on independently
     /// by the worker threads.
-    fn force_root(
+    fn force_root<H: HashMode>(
         &self,
-        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
     ) -> Result<Box<BranchNode>, CreateProposalError> {
         // There are 3 different cases to handle depending on the value of the root node.
         //
@@ -111,9 +131,9 @@ impl ParallelMerkle {
     /// 0 children and a value (from an empty key), the root should be a leaf
     /// 1 child and no value, the child should be the root (need to update partial path)
     /// In all other cases, the root is already correct.
-    fn postprocess_trie(
+    fn postprocess_trie<H: HashMode>(
         &self,
-        nodestore: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        nodestore: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         mut branch: Box<BranchNode>,
     ) -> Result<Option<Node>, FileIoError> {
         let mut children_iter = branch
@@ -124,7 +144,7 @@ impl ParallelMerkle {
         let first_child = children_iter.next();
         match first_child {
             None => {
-                Ok(branch.value.map(|value| {
+                Ok(branch.value.take().map(|value| {
                     // There is a value for the empty key. Create a leaf with the value and return.
                     Node::Leaf(LeafNode {
                         value,
@@ -164,8 +184,8 @@ impl ParallelMerkle {
 
     /// Call by a worker to processes requests from `child_receiver` and send back a response on
     /// `response_sender` once the main thread closes the child sender.
-    fn worker_event_loop(
-        mut merkle: Merkle<NodeStore<Mutable<Propose>, FileBacked>>,
+    fn worker_event_loop<H: HashMode>(
+        mut merkle: Merkle<NodeStore<Mutable<Propose>, FileBacked, H>>,
         first_path_component: PathComponent,
         child_receiver: Receiver<BatchOp<Key, Value>>,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -207,13 +227,6 @@ impl ParallelMerkle {
             .root_mut()
             .take()
             .map(|root| {
-                #[cfg(not(feature = "ethhash"))]
-                let (root_node, root_hash) =
-                    NodeStore::<Mutable<Propose>, FileBacked>::hash_helper(
-                        root,
-                        Path::from(&[first_path_component.as_u8()]),
-                    )?;
-                #[cfg(feature = "ethhash")]
                 let (root_node, root_hash) =
                     nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
                 Ok(Child::MaybePersisted(root_node, root_hash))
@@ -230,9 +243,9 @@ impl ParallelMerkle {
 
     /// Creates a worker for performing operations on a subtrie, with the subtrie being determined
     /// by the value of the `first_path_component`.
-    fn create_worker(
+    fn create_worker<H: HashMode>(
         pool: &ThreadPool,
-        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -280,10 +293,10 @@ impl ParallelMerkle {
 
     // Collect responses from the workers, each representing the root of a subtrie and merge them into the
     // root node of the main trie.
-    fn merge_children(
+    fn merge_children<H: HashMode>(
         &mut self,
         response_channel: Receiver<Result<Response, FileIoError>>,
-        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         root_branch: &mut BranchNode,
     ) -> Result<(), FileIoError> {
         // BLOCKING: `recv()` blocks the coordinator (main) thread waiting for each worker to
@@ -309,10 +322,10 @@ impl ParallelMerkle {
 
     /// Get a worker from the worker pool based on the `first_path_component` value. Create a worker if
     /// it doesn't exist already.
-    fn worker(
+    fn worker<H: HashMode>(
         &mut self,
         pool: &ThreadPool,
-        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -336,10 +349,10 @@ impl ParallelMerkle {
 
     /// Removes all of the entries in the trie. For the root entry, the value is removed but the
     /// root itself will remain. An empty root will only be removed during post processing.
-    fn remove_all_entries(
+    fn remove_all_entries<H: HashMode>(
         &mut self,
         pool: &ThreadPool,
-        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         root_branch: &mut BranchNode,
         response_sender: &Sender<Result<Response, FileIoError>>,
     ) -> Result<(), CreateProposalError> {
@@ -385,14 +398,18 @@ impl ParallelMerkle {
     ///
     /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
-    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
-    /// unable to convert a u8 index into a path component.
-    pub fn apply(
+    /// the workers, a `CreateProposalError::InvalidConversionToPathComponent` if it is
+    /// unable to convert a u8 index into a path component, a
+    /// `CreateProposalError::KeyTooLong` if an operation's key is longer than
+    /// [`MAX_KEY_BYTES`](crate::api::MAX_KEY_BYTES), and a
+    /// `CreateProposalError::EmptyValue` if a `Put` carries an empty value under the
+    /// Ethereum hash scheme.
+    pub fn apply<H: HashMode>(
         &mut self,
-        mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked>,
+        mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked, H>,
         batch: impl IntoBatchIter,
         pool: &ThreadPool,
-    ) -> Result<NodeStore<Mutable<Propose>, FileBacked>, CreateProposalError> {
+    ) -> Result<NodeStore<Mutable<Propose>, FileBacked, H>, CreateProposalError> {
         // Prepare step: Force the root into a branch with no partial path in preparation for
         // performing parallel modifications to the trie.
         let mut root_branch = self.force_root(&mut mutable_nodestore)?;
@@ -404,6 +421,7 @@ impl ParallelMerkle {
         // responsible for the sub-trie corresponding to the operation's first nibble.
         for res in batch.into_batch_iter::<CreateProposalError>() {
             let op = res?;
+            crate::api::check_batch_op::<H>(&op)?;
             // Get the first nibble of the key to determine which worker to send the request to.
             //
             // Need to handle an empty key. Since the partial_path of the root must be empty, an
@@ -467,7 +485,7 @@ impl ParallelMerkle {
             )?;
 
             // Send the current operation to the worker.
-            // TODO: Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
+            // TODO(bernard-avalabs): Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
             //       to the worker. It may be possible to send a nibble iterator instead of a
             //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
             //       eliminate a memory copy but may require some code refactoring.

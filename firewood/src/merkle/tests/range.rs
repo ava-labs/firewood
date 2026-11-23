@@ -1,9 +1,19 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "tests may panic on overflow"
+)]
+
+use firewood_macros::hash_mode;
+use firewood_storage::HashMode;
+use firewood_storage::U4;
+
+use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
-use firewood_storage::U4;
+use crate::api::MAX_KEY_BYTES;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
@@ -21,7 +31,7 @@ fn proof_node(nibbles: &[u8]) -> ProofNode {
         key: nibble_path(nibbles),
         partial_len: 0,
         value_digest: None,
-        child_hashes: Children::new(),
+        child_hashes: DenseChildren::new(),
     }
 }
 
@@ -31,8 +41,8 @@ fn proof_node(nibbles: &[u8]) -> ProofNode {
 /// iterator applies the same fix, so iterator values match what the proof
 /// nodes contain. Panics if a key is not present in the trie — callers are
 /// expected to pass keys that were just committed.
-fn stored_key_values<K: AsRef<[u8]>>(
-    merkle: &Merkle<NodeStore<Committed, MemStore>>,
+fn stored_key_values<H: HashMode, K: AsRef<[u8]>>(
+    merkle: &Merkle<NodeStore<Committed, MemStore, H>>,
     keys: impl IntoIterator<Item = K>,
 ) -> KeyValuePairs {
     keys.into_iter()
@@ -55,14 +65,14 @@ fn stored_key_values<K: AsRef<[u8]>>(
 
 #[test]
 fn outside_children_empty_proof() {
-    let result = compute_outside_children(&[], EdgeBoundary::Left(None)).unwrap();
+    let (result, _) = compute_outside_children(&[], &EdgeBoundary::Left(None)).unwrap();
     assert!(result.is_empty());
 }
 
 #[test]
 fn outside_children_single_node_no_boundary() {
     let nodes = [proof_node(&[1, 2])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(None)).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(None)).unwrap();
     assert!(result.is_empty());
 }
 
@@ -71,7 +81,7 @@ fn outside_children_single_node_exact_match() {
     // Boundary matches terminal exactly — no children marked.
     let nodes = [proof_node(&[1, 2])];
     // boundary key 0x12 expands to nibbles [1, 2]
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(Some(&[0x12]))).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(Some(&[0x12]))).unwrap();
     assert!(result.is_empty());
 }
 
@@ -79,9 +89,9 @@ fn outside_children_single_node_exact_match() {
 fn outside_children_single_node_exact_match_right_edge() {
     // Boundary matches terminal exactly on right edge — all children marked outside.
     let nodes = [proof_node(&[1, 2])];
-    let result = compute_outside_children(
+    let (result, _) = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x12]))),
+        &EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x12]))),
     )
     .unwrap();
     // Look up the mask for the terminal node at [1, 2].
@@ -98,15 +108,15 @@ fn outside_children_single_node_exact_match_right_edge() {
 fn outside_children_ancestor_left_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
     // Terminal is ancestor of boundary. On-path nibble = 5.
-    // Left edge: children < 5 are outside, plus child 5 itself.
+    // Left edge: children < 5 are outside.
     let nodes = [proof_node(&[1])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(Some(&[0x15]))).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(Some(&[0x15]))).unwrap();
     let mask = result[&nibble_path(&[1])];
-    // Children 0..=5 should be outside (left of 5, plus 5 itself)
+    // Children 0..5 should be outside (strictly left of 5)
     for i in 0..16u8 {
         assert_eq!(
             mask.is_set(U4::new_masked(i)),
-            i <= 5,
+            i < 5,
             "left edge ancestor: child {i}"
         );
     }
@@ -115,18 +125,18 @@ fn outside_children_ancestor_left_edge() {
 #[test]
 fn outside_children_ancestor_right_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
-    // Right edge: children > 5 are outside, plus child 5 itself.
+    // Right edge: children > 5 are outside.
     let nodes = [proof_node(&[1])];
-    let result = compute_outside_children(
+    let (result, _) = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x15]))),
+        &EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x15]))),
     )
     .unwrap();
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
         assert_eq!(
             mask.is_set(U4::new_masked(i)),
-            i >= 5,
+            i > 5,
             "right edge ancestor: child {i}"
         );
     }
@@ -137,7 +147,7 @@ fn outside_children_diverges_past_terminal_left() {
     // Terminal key [1, 3], boundary nibbles [1, 5] (diverge at pos 1: 5 > 3).
     // Left edge + boundary past terminal → all children outside.
     let nodes = [proof_node(&[1, 3])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(Some(&[0x15]))).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(Some(&[0x15]))).unwrap();
     let mask = result[&nibble_path(&[1, 3])];
     for i in 0..16u8 {
         assert!(
@@ -152,7 +162,7 @@ fn outside_children_diverges_before_terminal_left() {
     // Terminal key [1, 7], boundary nibbles [1, 5] (diverge at pos 1: 5 < 7).
     // Left edge + boundary before terminal → no children outside.
     let nodes = [proof_node(&[1, 7])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(Some(&[0x15]))).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(Some(&[0x15]))).unwrap();
     assert!(
         !result.contains_key(&nibble_path(&[1, 7])),
         "no mask when boundary before terminal"
@@ -164,7 +174,7 @@ fn outside_children_two_nodes_left_edge() {
     // Parent [1], child [1, 5]. On-path nibble = 5.
     // Left edge: children < 5 on parent are outside.
     let nodes = [proof_node(&[1]), proof_node(&[1, 5])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(None)).unwrap();
+    let (result, _) = compute_outside_children(&nodes, &EdgeBoundary::Left(None)).unwrap();
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
         assert_eq!(
@@ -180,8 +190,8 @@ fn outside_children_two_nodes_right_edge() {
     // Parent [1], child [1, 5]. On-path nibble = 5.
     // Right edge: children > 5 on parent are outside.
     let nodes = [proof_node(&[1]), proof_node(&[1, 5])];
-    let result =
-        compute_outside_children(&nodes, EdgeBoundary::Right(RightBoundary::InRange(None)))
+    let (result, _) =
+        compute_outside_children(&nodes, &EdgeBoundary::Right(RightBoundary::InRange(None)))
             .unwrap();
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
@@ -199,41 +209,45 @@ fn outside_children_child_not_prefixed_by_parent() {
     // child.key.get(parent.key.len()) = [2,5].get(1) = Some(5), so no error;
     // but child key [1] with parent [1, 2] means child.key.get(2) = None → error.
     let nodes = [proof_node(&[1, 2]), proof_node(&[1])];
-    let result = compute_outside_children(&nodes, EdgeBoundary::Left(None));
+    let result = compute_outside_children(&nodes, &EdgeBoundary::Left(None));
     assert!(
         matches!(result, Err(ProofError::ShouldBePrefixOfNextKey)),
         "expected ShouldBePrefixOfNextKey, got {result:?}"
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests that missing keys can also be proven. The test explicitly uses a single
 // entry trie and checks for missing keys both before and after the single entry.
-fn test_missing_key_proof() {
+fn test_missing_key_proof<H: HashMode>() {
     let items = [("k", "v")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for key in ["a", "j", "l", "z"] {
         let proof = merkle.prove(key.as_ref()).unwrap();
         assert!(!proof.is_empty());
-        assert!(proof.len() == 1);
+        assert_eq!(proof.len(), 1);
 
-        proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
+        proof
+            .verify(key, None::<&[u8]>, &root_hash, H::ALGORITHM)
+            .unwrap();
     }
 }
 
+#[hash_mode]
 #[test]
 // A truncated bounded range proof: caller asks for [start, end] with a limit
 // that is hit, so the generator anchors `end_proof` at the last returned key
 // rather than at `end`. The verifier must accept the proof when called with
 // the originally requested `(start, end)` — those are the only bounds the
 // caller has; it cannot predict the post-truncation anchor.
-fn test_truncated_bounded_range_proof_round_trip() {
+fn test_truncated_bounded_range_proof_round_trip<H: HashMode>() {
     let items: Vec<([u8; 4], [u8; 4])> = (0u32..1000)
         .map(|i| (i.to_be_bytes(), i.to_be_bytes()))
         .collect();
-    let merkle = init_merkle(items.iter().map(|(k, v)| (k.as_slice(), v.as_slice())));
+    let merkle = init_merkle::<H, _, _, _>(items.iter().map(|(k, v)| (k.as_slice(), v.as_slice())));
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Bound covers many keys; limit forces truncation.
@@ -249,9 +263,17 @@ fn test_truncated_bounded_range_proof_round_trip() {
 
     // Verify with the *original* requested bounds — the only ones the caller
     // can provide. End_proof anchors at the last returned key, not `end`.
-    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
+    verify_range_proof(
+        Some(&start),
+        Some(&end),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Unbounded full-range proof: start_key = end_key = None. `Merkle::range_proof`
 // produces a proof with empty start_proof, empty end_proof, and every key in
@@ -259,8 +281,8 @@ fn test_truncated_bounded_range_proof_round_trip() {
 // is the safety net. Regression for the FFI path (TestRoundTripSerialization
 // et al.) where the prior check rejected empty end_proof whenever key_values
 // was non-empty.
-fn test_full_range_proof_verifies_unbounded() {
-    let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
+fn test_full_range_proof_verifies_unbounded<H: HashMode>() {
+    let merkle = init_merkle::<H, _, _, _>((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle.range_proof(None, None, None).unwrap();
@@ -268,15 +290,17 @@ fn test_full_range_proof_verifies_unbounded() {
     assert!(range_proof.start_proof().is_empty());
     assert!(range_proof.end_proof().is_empty());
 
-    verify_range_proof::<_>(
+    verify_range_proof(
         Option::<&[u8]>::None,
         Option::<&[u8]>::None,
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // End-proof terminal is a value-node strict prefix of last_kv: trie
 // {0x05, 0x10, 0x10\x10, 0x10\x50}, range [0x05, 0x10\x30]. The end_proof
@@ -286,14 +310,14 @@ fn test_full_range_proof_verifies_unbounded() {
 // requested bound `0x10\x30` (inclusive); verify_edge then anchors the
 // proof against `0x10\x30` and the hash check correctly catches any
 // tampering of `0x10\x10`'s value.
-fn test_terminal_strict_prefix_of_last_kv_verifies() {
+fn test_terminal_strict_prefix_of_last_kv_verifies<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[
         (b"\x05", b"before"),
         (b"\x10", b"parent"),
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -307,11 +331,13 @@ fn test_terminal_strict_prefix_of_last_kv_verifies() {
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Dropped trailing key collapses to a smaller proven range: same trie as
 // `test_terminal_strict_prefix_of_last_kv_verifies`, but an attacker
@@ -323,14 +349,14 @@ fn test_terminal_strict_prefix_of_last_kv_verifies() {
 // that `last_kv < the requested bound` and re-requests `(0x10, 0x10\x30]`
 // — that follow-up query is what surfaces the omitted `0x10\x10`. No
 // information is hidden.
-fn test_dropped_trailing_key_accepted_as_partial_coverage() {
+fn test_dropped_trailing_key_accepted_as_partial_coverage<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[
         (b"\x05", b"before"),
         (b"\x10", b"parent"),
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let honest = merkle
@@ -351,25 +377,33 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
         crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
         crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
         tampered_kvs.into_boxed_slice(),
+        H::ALGORITHM,
     );
 
     // The verifier accepts: the proof is internally consistent and proves
     // `[0x05, 0x10]`. It is *not* the verifier's job to enforce that the
     // proven range matches the requested range — partial coverage is a
     // valid outcome the caller is responsible for handling.
-    verify_range_proof(
+    let proven = crate::merkle::verify_range_proof(
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &tampered,
     )
     .unwrap();
 
-    // The caller's `last_kv < requested_last` check is what flags partial
-    // coverage and should drive a follow-up request.
-    assert!(tampered.key_values().last().unwrap().0.as_ref() < b"\x10\x30".as_slice());
+    // The verifier now *reports* the partial coverage rather than leaving
+    // the caller to re-derive it: the proven upper bound is `0x10`, not the
+    // requested `0x10\x30`. A caller that replaces state over the requested
+    // bound would delete `0x10\x10` on the strength of a proof that stops
+    // at `0x10`.
+    assert_eq!(proven.start.as_deref(), Some(b"\x05".as_slice()));
+    assert_eq!(proven.end.as_deref(), Some(b"\x10".as_slice()));
+    assert!(proven.end.as_deref().unwrap() < b"\x10\x30".as_slice());
 }
 
+#[hash_mode]
 #[test]
 // Tampering the *value* of an in-range key must be rejected. Same trie
 // and request as `test_terminal_strict_prefix_of_last_kv_verifies`, but
@@ -378,14 +412,14 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
 // `compute_outside_children` keeps `0x10`'s child 1 in-range, so the
 // hash check recurses into the proving trie's tampered `0x10\x10` leaf
 // and the root hash mismatches.
-fn test_tampered_in_range_value_rejected() {
+fn test_tampered_in_range_value_rejected<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[
         (b"\x05", b"before"),
         (b"\x10", b"parent"),
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let honest = merkle
@@ -408,12 +442,14 @@ fn test_tampered_in_range_value_rejected() {
         crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
         crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
         tampered_kvs.into_boxed_slice(),
+        H::ALGORITHM,
     );
 
-    let result = verify_range_proof(
+    let result = crate::merkle::verify_range_proof(
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &tampered,
     );
     assert!(
@@ -422,6 +458,7 @@ fn test_tampered_in_range_value_rejected() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Divergent terminal past last_kv: trie {0x05, 0x10\x50}, range
 // [0x05, 0x10\x30]. The end_proof of `0x10\x30` walks root → leaf
@@ -430,9 +467,9 @@ fn test_tampered_in_range_value_rejected() {
 // last_kv 0x05 → right-edge anchor is **exclusive at 0x10\x50**. The
 // proof structurally proves `[0x05, 0x10\x50)`, which covers the
 // requested `[0x05, 0x10\x30]`.
-fn test_divergent_terminal_past_last_kv() {
+fn test_divergent_terminal_past_last_kv<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -447,11 +484,13 @@ fn test_divergent_terminal_past_last_kv() {
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Symmetric mirror of `test_divergent_terminal_past_last_kv` on the left
 // edge: trie {0x05, 0x10}, range [0x07, 0x10]. `start_key = 0x07` doesn't
@@ -465,9 +504,9 @@ fn test_divergent_terminal_past_last_kv() {
 // on the left edge); if the existing logic implicitly handles this case
 // correctly, this test passes. If it doesn't, we'd need a `LeftOutOfRange`
 // variant for symmetry.
-fn test_divergent_terminal_before_first_kv() {
+fn test_divergent_terminal_before_first_kv<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10", b"b")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -481,21 +520,220 @@ fn test_divergent_terminal_before_first_kv() {
         Some(b"\x07".as_slice()),
         Some(b"\x10".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
 }
 
+/// The trie of `OUT_OF_RANGE_ITEMS` proved over
+/// `[OUT_OF_RANGE_START, OUT_OF_RANGE_END]` has an end proof that runs from
+/// the root through the branch at nibble `2`, which the start proof does not
+/// share, to the leaf `0x2580`, past the proven range.
+const OUT_OF_RANGE_ITEMS: &[(&[u8], &[u8])] =
+    &[(b"\x10", b"a"), (b"\x20\x00", b"b"), (b"\x25\x80", b"c")];
+const OUT_OF_RANGE_START: &[u8] = b"\x00";
+const OUT_OF_RANGE_END: &[u8] = b"\x25";
+
+/// Verifies the `OUT_OF_RANGE_ITEMS` range proof after `tamper` edits its end
+/// proof and key-values.
+fn verify_tampered_out_of_range<H: HashMode>(
+    tamper: impl FnOnce(&mut Vec<ProofNode>, &mut KeyValuePairs),
+) -> Result<ProvenRange, api::Error> {
+    let merkle = init_merkle::<H, _, _, _>(OUT_OF_RANGE_ITEMS.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let honest = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    let mut end_nodes = honest.end_proof().as_ref().to_vec();
+    let mut key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    tamper(&mut end_nodes, &mut key_values);
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(end_nodes.into_boxed_slice()),
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    crate::merkle::verify_range_proof(
+        Some(OUT_OF_RANGE_START),
+        Some(OUT_OF_RANGE_END),
+        &root_hash,
+        H::ALGORITHM,
+        &proof,
+    )
+}
+
+#[hash_mode]
+#[test]
+fn test_out_of_range_terminal_honest_proof_verifies<H: HashMode>() {
+    let proven = verify_tampered_out_of_range::<H>(|end_nodes, _| {
+        assert_eq!(
+            end_nodes.last().map(|node| node.key.clone()),
+            Some(nibble_path(&[2, 5, 8, 0])),
+            "the end proof ends at the leaf past the proven range",
+        );
+    })
+    .unwrap();
+    assert_eq!(proven.end.as_deref(), Some(OUT_OF_RANGE_END));
+}
+
+#[hash_mode]
+#[test]
+fn test_tampered_out_of_range_terminal_rejected<H: HashMode>() {
+    // `verify_edge` never runs on an out-of-range end proof, so the walk to
+    // its terminal is what authenticates these fields. The root-hash
+    // reconstruction recomputes the parent's on-path slot rather than reading
+    // it, so only the walk catches the "parent's on-path child" edit.
+    type Tamper = fn(&mut [ProofNode]);
+    let tampers: [(&str, Tamper); 4] = [
+        ("parent's on-path child", |nodes| {
+            let [.., parent, _] = nodes else {
+                panic!("the end proof descends below the root");
+            };
+            parent
+                .child_hashes
+                .insert(U4::new_masked(5), TrieHash::from([0xab; 32]).into());
+        }),
+        ("terminal key", |nodes| {
+            let terminal = nodes.last_mut().unwrap();
+            *terminal.key.last_mut().unwrap() = PathComponent(U4::new_masked(9));
+        }),
+        ("terminal value", |nodes| {
+            nodes.last_mut().unwrap().value_digest =
+                Some(ValueDigest::Value(b"forged".to_vec().into_boxed_slice()));
+        }),
+        ("terminal child", |nodes| {
+            nodes
+                .last_mut()
+                .unwrap()
+                .child_hashes
+                .insert(U4::new_masked(3), TrieHash::from([0xab; 32]).into());
+        }),
+    ];
+    for (field, tamper) in tampers {
+        let result = verify_tampered_out_of_range::<H>(|end_nodes, _| tamper(end_nodes));
+        assert!(
+            matches!(
+                result,
+                Err(api::Error::ProofError(ProofError::EdgeProofHashMismatch {
+                    edge: ProofEdge::Right,
+                    ..
+                }))
+            ),
+            "tampered {field}: {result:?}",
+        );
+    }
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_under_out_of_range_terminal_rejected<H: HashMode>() {
+    // `0x25` sorts below the terminal `0x2580` but shares its slot under the
+    // branch at nibble `2`, so the reconstruction must hash it alongside the
+    // terminal.
+    let result = verify_tampered_out_of_range::<H>(|_, key_values| {
+        key_values.push((b"\x25".as_slice().into(), b"forged".as_slice().into()));
+    });
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_beside_out_of_range_root_terminal_rejected<H: HashMode>() {
+    // A one-key trie's end proof is the root leaf `0x28` alone, with no
+    // parent. The forged `0x20` falls in the proven range, and the
+    // reconstruction hashes it together with that leaf, so the root hash
+    // rejects it.
+    let merkle = init_merkle::<H, _, _, _>([(b"\x28", b"b")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let honest = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    assert_eq!(honest.end_proof().as_ref().len(), 1);
+    let forged: KeyValuePairs = vec![(b"\x20".as_slice().into(), b"forged".as_slice().into())];
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
+        forged.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let result = verify_range_proof(
+        Some(OUT_OF_RANGE_START),
+        Some(OUT_OF_RANGE_END),
+        &root_hash,
+        H::ALGORITHM,
+        &proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_under_divergent_start_terminal_rejected<H: HashMode>() {
+    // Mirrors `test_key_value_under_out_of_range_terminal_rejected` on the
+    // left edge: the start proof for `0x07` ends at the leaf `0x05` in slot
+    // `0`, and a forged `0x08` shares that slot. The reconstruction hashes it
+    // alongside the leaf, so the root hash rejects it.
+    let merkle = init_merkle::<H, _, _, _>([(b"\x05", b"a"), (b"\x10", b"b")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let (start, end): (&[u8], &[u8]) = (b"\x07", b"\x10");
+    let honest = merkle.range_proof(Some(start), Some(end), None).unwrap();
+    let mut key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    key_values.insert(
+        0,
+        (
+            b"\x08".as_slice().into(),
+            b"forged".to_vec().into_boxed_slice(),
+        ),
+    );
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let result = verify_range_proof(Some(start), Some(end), &root_hash, H::ALGORITHM, &proof);
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
+#[hash_mode]
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
-fn test_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(0..items.len() - 1);
@@ -506,7 +744,12 @@ fn test_range_proof() {
 
         let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            H::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -514,21 +757,24 @@ fn test_range_proof() {
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
+            H::ALGORITHM,
             &range_proof,
         )
         .unwrap();
     }
 }
 
+#[hash_mode]
 #[test]
 // Tests that out-of-order key-value pairs in a range proof are rejected.
-fn test_bad_range_proof_out_of_order() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_bad_range_proof_out_of_order<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(0..items.len() - 2);
@@ -566,7 +812,12 @@ fn test_bad_range_proof_out_of_order() {
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            H::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -575,22 +826,24 @@ fn test_bad_range_proof_out_of_order() {
                 Some(items[start].0),
                 Some(items[end - 1].0),
                 &root_hash,
-                &range_proof,
+                H::ALGORITHM,
+                &range_proof
             )
             .is_err()
         );
     }
 }
 
+#[hash_mode]
 #[test]
 // Detects a modified key via trie reconstruction and root hash mismatch.
-fn test_bad_range_proof_modified_key() {
+fn test_bad_range_proof_modified_key<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -610,34 +863,35 @@ fn test_bad_range_proof_modified_key() {
     kvs[mid].0 = key.into_boxed_slice();
     kvs.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice(), H::ALGORITHM);
     assert!(
         verify_range_proof(
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err(),
         "modified key should be detected"
     );
 }
 
-#[test]
 // Detects a modified value via trie reconstruction and root hash mismatch.
 // In ethhash mode, account values at depth 32 have their storageRoot field
 // replaced with a computed hash during hashing. A blind XOR on the raw value
 // may only affect the storageRoot (or the RLP header that wraps it), making
 // the modification invisible to the hash. This test is not meaningful under
-// ethhash because the hashing intentionally ignores part of the value.
-#[cfg(not(feature = "ethhash"))]
-fn test_bad_range_proof_modified_value() {
+// ethhash because the hashing intentionally ignores part of the value, so it
+// is pinned to `MerkleDbHash` rather than dualized.
+#[test]
+fn test_bad_range_proof_modified_value_merkledb() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<MerkleDbHash, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -656,29 +910,36 @@ fn test_bad_range_proof_modified_value() {
     val[0] ^= 0x01;
     kvs[mid].1 = val.into_boxed_slice();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        kvs.into_boxed_slice(),
+        MerkleDbHash::ALGORITHM,
+    );
     assert!(
         verify_range_proof(
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
-            &range_proof,
+            MerkleDbHash::ALGORITHM,
+            &range_proof
         )
         .is_err(),
         "modified value should be detected"
     );
 }
 
+#[hash_mode]
 #[test]
 // Detects gapped entries (missing middle element) via trie reconstruction
 // and root hash mismatch.
-fn test_bad_range_proof_gapped_entries() {
+fn test_bad_range_proof_gapped_entries<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -695,29 +956,32 @@ fn test_bad_range_proof_gapped_entries() {
     let mid = kvs.len() / 2;
     kvs.remove(mid);
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice(), H::ALGORITHM);
     assert!(
         verify_range_proof(
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err(),
         "gapped entries should be detected"
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests normal range proof with two non-existent proofs.
 // The test cases are generated randomly.
-fn test_range_proof_with_non_existent_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_range_proof_with_non_existent_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(1..items.len() - 2);
@@ -747,11 +1011,23 @@ fn test_range_proof_with_non_existent_proof() {
 
         let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            H::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
+        verify_range_proof(
+            Some(&first),
+            Some(&last),
+            &root_hash,
+            H::ALGORITHM,
+            &range_proof,
+        )
+        .unwrap();
     }
 
     // Special case, two edge proofs for two edge key.
@@ -763,25 +1039,39 @@ fn test_range_proof_with_non_existent_proof() {
 
     let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof).unwrap();
+    verify_range_proof(
+        Some(first),
+        Some(last),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
 // Detecting gaps requires full trie reconstruction, not yet implemented.
-fn test_range_proof_with_invalid_non_existent_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_range_proof_with_invalid_non_existent_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     // Case 1
     let mut start = 100;
@@ -797,7 +1087,12 @@ fn test_range_proof_with_invalid_non_existent_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -806,7 +1101,8 @@ fn test_range_proof_with_invalid_non_existent_proof() {
             Some(&first),
             Some(items[end - 1].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err()
     );
@@ -825,8 +1121,12 @@ fn test_range_proof_with_invalid_non_existent_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash_2 = merkle.nodestore().root_hash().unwrap();
 
@@ -835,22 +1135,24 @@ fn test_range_proof_with_invalid_non_existent_proof() {
             Some(items[start].0),
             Some(&last),
             &root_hash_2,
-            &range_proof_2,
+            H::ALGORITHM,
+            &range_proof_2
         )
         .is_err()
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
-fn test_one_element_range_proof() {
+fn test_one_element_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     // One element with existent edge proof, both edge proofs
     // point to the SAME key.
@@ -864,6 +1166,7 @@ fn test_one_element_range_proof() {
         proof.clone(), // Same proof for start and end
         proof,
         key_values.into(),
+        H::ALGORITHM,
     );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
@@ -872,6 +1175,7 @@ fn test_one_element_range_proof() {
         Some(items[start].0),
         Some(items[start].0),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
@@ -883,12 +1187,18 @@ fn test_one_element_range_proof() {
 
     let key_values_2 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_2 = RangeProof::new(start_proof_2, end_proof_2, key_values_2.into());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into(),
+        H::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(&first),
         Some(items[start].0),
         &root_hash,
+        H::ALGORITHM,
         &range_proof_2,
     )
     .unwrap();
@@ -900,12 +1210,18 @@ fn test_one_element_range_proof() {
 
     let key_values_3 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_3 = RangeProof::new(start_proof_3, end_proof_3, key_values_3.into());
+    let range_proof_3 = RangeProof::new(
+        start_proof_3,
+        end_proof_3,
+        key_values_3.into(),
+        H::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(items[start].0),
         Some(&last),
         &root_hash,
+        H::ALGORITHM,
         &range_proof_3,
     )
     .unwrap();
@@ -916,14 +1232,26 @@ fn test_one_element_range_proof() {
 
     let key_values_4 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_4 = RangeProof::new(start_proof_4, end_proof_4, key_values_4.into());
+    let range_proof_4 = RangeProof::new(
+        start_proof_4,
+        end_proof_4,
+        key_values_4.into(),
+        H::ALGORITHM,
+    );
 
-    verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
+    verify_range_proof(
+        Some(&first),
+        Some(&last),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof_4,
+    )
+    .unwrap();
 
     // Test the mini trie with only a single element.
     let key = rng.random::<[u8; 32]>();
     let val = rng.random::<[u8; 20]>();
-    let merkle_mini = init_merkle(vec![(key, val)]);
+    let merkle_mini = init_merkle::<H, _, _, _>(vec![(key, val)]);
 
     let first = &[0; 32];
     let start_proof_5 = merkle_mini.prove(first).unwrap();
@@ -931,23 +1259,37 @@ fn test_one_element_range_proof() {
 
     let key_values_5 = stored_key_values(&merkle_mini, std::iter::once(key));
 
-    let range_proof_5 = RangeProof::new(start_proof_5, end_proof_5, key_values_5.into());
+    let range_proof_5 = RangeProof::new(
+        start_proof_5,
+        end_proof_5,
+        key_values_5.into(),
+        H::ALGORITHM,
+    );
 
     let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5).unwrap();
+    verify_range_proof(
+        Some(first),
+        Some(&key),
+        &root_hash_mini,
+        H::ALGORITHM,
+        &range_proof_5,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
-fn test_all_elements_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_all_elements_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -959,13 +1301,18 @@ fn test_all_elements_proof() {
 
     let key_values_2 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(items[start].0),
         Some(items[end].0),
         &root_hash,
+        H::ALGORITHM,
         &range_proof_2,
     )
     .unwrap();
@@ -978,21 +1325,34 @@ fn test_all_elements_proof() {
 
     let key_values_3 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof_3 =
-        RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
+    let range_proof_3 = RangeProof::new(
+        start_proof_3,
+        end_proof_3,
+        key_values_3.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
-    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3).unwrap();
+    verify_range_proof(
+        Some(first),
+        Some(last),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof_3,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Empty key_values with a non-existent boundary key past the last entry.
-fn test_empty_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_empty_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let first = increase_key(items[items.len() - 1].0);
@@ -1000,15 +1360,29 @@ fn test_empty_range_proof() {
     assert!(!proof.is_empty());
 
     let key_values: KeyValuePairs = Vec::new();
-    let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        proof.clone(),
+        proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
-    verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
+    verify_range_proof(
+        Some(&first),
+        Some(&first),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-fn test_gapped_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_gapped_range_proof<H: HashMode>() {
     let mut items = Vec::new();
     // Sorted entries
     for i in 0..10_u32 {
@@ -1018,7 +1392,7 @@ fn test_gapped_range_proof() {
         }
         items.push((key, i.to_be_bytes()));
     }
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     let first = 2;
     let last = 8;
@@ -1038,7 +1412,12 @@ fn test_gapped_range_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1047,22 +1426,24 @@ fn test_gapped_range_proof() {
             Some(&items[first].0),
             Some(&items[last - 1].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err(),
         "gapped entries should be detected in small trie"
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests the element is not in the range covered by proofs.
-fn test_same_side_proof() {
+fn test_same_side_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     let pos = 1000;
     let mut last = decrease_key(items[pos].0);
@@ -1077,11 +1458,25 @@ fn test_same_side_proof() {
         items[pos].1.to_vec().into_boxed_slice(),
     )];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,).is_err());
+    assert!(
+        verify_range_proof(
+            Some(&first),
+            Some(&last),
+            &root_hash,
+            H::ALGORITHM,
+            &range_proof
+        )
+        .is_err()
+    );
 
     first = increase_key(items[pos].0);
     last = first;
@@ -1095,15 +1490,30 @@ fn test_same_side_proof() {
         items[pos].1.to_vec().into_boxed_slice(),
     )];
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
-    assert!(verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,).is_err());
+    assert!(
+        verify_range_proof(
+            Some(&first),
+            Some(&last),
+            &root_hash,
+            H::ALGORITHM,
+            &range_proof_2
+        )
+        .is_err()
+    );
 }
 
+#[hash_mode]
 #[test]
 // Tests the range starts from zero.
-fn test_single_side_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_single_side_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     for _ in 0..10 {
@@ -1115,7 +1525,7 @@ fn test_single_side_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<H, _, _, _>(items.clone());
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -1126,19 +1536,32 @@ fn test_single_side_range_proof() {
             let key_values =
                 stored_key_values(&merkle, items.iter().take(case + 1).map(|(k, _)| *k));
 
-            let range_proof =
-                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+            let range_proof = RangeProof::new(
+                start_proof,
+                end_proof,
+                key_values.into_boxed_slice(),
+                H::ALGORITHM,
+            );
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof).unwrap();
+            verify_range_proof(
+                Some(start),
+                Some(items[case].0),
+                &root_hash,
+                H::ALGORITHM,
+                &range_proof,
+            )
+            .unwrap();
         }
     }
 }
 
+#[hash_mode]
 #[test]
 // Tests the range ends with 0xffff...fff.
-fn test_reverse_single_side_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_reverse_single_side_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     for _ in 0..10 {
@@ -1150,7 +1573,7 @@ fn test_reverse_single_side_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<H, _, _, _>(items.clone());
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -1161,19 +1584,31 @@ fn test_reverse_single_side_range_proof() {
 
             let key_values = stored_key_values(&merkle, items.iter().skip(case).map(|(k, _)| *k));
 
-            let range_proof =
-                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+            let range_proof = RangeProof::new(
+                start_proof,
+                end_proof,
+                key_values.into_boxed_slice(),
+                H::ALGORITHM,
+            );
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof).unwrap();
+            verify_range_proof(
+                Some(items[case].0),
+                Some(end),
+                &root_hash,
+                H::ALGORITHM,
+                &range_proof,
+            )
+            .unwrap();
         }
     }
 }
 
+#[hash_mode]
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
-fn test_both_sides_range_proof() {
+fn test_both_sides_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     for _ in 0..10 {
@@ -1185,7 +1620,7 @@ fn test_both_sides_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<H, _, _, _>(items.clone());
 
         let start = &[0; 32];
         let end = &[255; 32];
@@ -1194,25 +1629,39 @@ fn test_both_sides_range_proof() {
 
         let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            H::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        verify_range_proof(Some(start), Some(end), &root_hash, &range_proof).unwrap();
+        verify_range_proof(
+            Some(start),
+            Some(end),
+            &root_hash,
+            H::ALGORITHM,
+            &range_proof,
+        )
+        .unwrap();
     }
 }
 
+#[hash_mode]
 #[test]
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-fn test_empty_value_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_empty_value_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 512);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -1233,7 +1682,12 @@ fn test_empty_value_range_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1242,23 +1696,26 @@ fn test_empty_value_range_proof() {
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err()
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-fn test_all_elements_empty_value_range_proof() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_all_elements_empty_value_range_proof<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let set = fixed_and_pseudorandom_data(&rng, 512);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -1277,7 +1734,12 @@ fn test_all_elements_empty_value_range_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1286,14 +1748,16 @@ fn test_all_elements_empty_value_range_proof() {
             Some(items[start].0),
             Some(items[end].0),
             &root_hash,
-            &range_proof,
+            H::ALGORITHM,
+            &range_proof
         )
         .is_err()
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_range_proof_keys_with_shared_prefix() {
+fn test_range_proof_keys_with_shared_prefix<H: HashMode>() {
     let items = vec![
         (
             hex::decode("aa10000000000000000000000000000000000000000000000000000000000000")
@@ -1306,7 +1770,7 @@ fn test_range_proof_keys_with_shared_prefix() {
             hex::decode("03").expect("Decoding failed"),
         ),
     ];
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     let start = hex::decode("0000000000000000000000000000000000000000000000000000000000000000")
         .expect("Decoding failed");
@@ -1318,17 +1782,30 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| k.as_slice()));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
+    verify_range_proof(
+        Some(&start),
+        Some(&end),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-fn test_bloated_range_proof() {
+fn test_bloated_range_proof<H: HashMode>() {
     // Use a small trie
     let mut items = Vec::new();
     for i in 0..100_u32 {
@@ -1340,7 +1817,7 @@ fn test_bloated_range_proof() {
         }
         items.push((key, value));
     }
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
 
     // In the 'malicious' case, we add proofs for every single item
     // (but only one key/value pair used as leaf)
@@ -1359,18 +1836,31 @@ fn test_bloated_range_proof() {
 
     let key_values = stored_key_values(&merkle, std::iter::once(target.0));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(&target.0), Some(&target.0), &root_hash, &range_proof).unwrap();
+    verify_range_proof(
+        Some(&target.0),
+        Some(&target.0),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap();
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof containing keys below the requested start key.
-fn test_bad_range_proof_key_below_start() {
+fn test_bad_range_proof_key_below_start<H: HashMode>() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"cc").unwrap();
@@ -1387,12 +1877,18 @@ fn test_bad_range_proof_key_below_start() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"cc".as_slice()),
         Some(b"dd".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1404,11 +1900,12 @@ fn test_bad_range_proof_key_below_start() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof containing keys above the requested end key.
-fn test_bad_range_proof_key_above_end() {
+fn test_bad_range_proof_key_above_end<H: HashMode>() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1425,12 +1922,18 @@ fn test_bad_range_proof_key_above_end() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"bb".as_slice()),
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1442,11 +1945,12 @@ fn test_bad_range_proof_key_above_end() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof with key-value pairs but no end proof.
-fn test_bad_range_proof_missing_end_proof() {
+fn test_bad_range_proof_missing_end_proof<H: HashMode>() {
     let items = [("bb", "v1"), ("cc", "v2")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1462,12 +1966,18 @@ fn test_bad_range_proof_missing_end_proof() {
         .collect();
 
     let empty_end: Proof<Box<[ProofNode]>> = Proof::new(Vec::new().into_boxed_slice());
-    let range_proof = RangeProof::new(start_proof, empty_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        empty_end,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"bb".as_slice()),
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1479,11 +1989,12 @@ fn test_bad_range_proof_missing_end_proof() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Rejects a start proof when no start key is specified.
-fn test_bad_range_proof_unexpected_start_proof() {
+fn test_bad_range_proof_unexpected_start_proof<H: HashMode>() {
     let items = [("bb", "v1"), ("cc", "v2")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1499,13 +2010,19 @@ fn test_bad_range_proof_unexpected_start_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     // Pass None as start key but provide a start proof — should be rejected
     let result = verify_range_proof(
         None::<&[u8]>,
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1518,12 +2035,14 @@ fn test_bad_range_proof_unexpected_start_proof() {
         "expected UnexpectedStartProof, got {result:?}"
     );
 }
+#[hash_mode]
 #[test]
 // Fuzz-style test that generates random data, creates range proofs for random
 // subranges, and verifies them standalone using only the root hash.
 // Covers: both-existent edges, left-nonexistent, right-nonexistent,
 // both-nonexistent, single-element, and full-range scenarios.
-fn test_range_proof_fuzz() {
+#[expect(clippy::arithmetic_side_effects, clippy::too_many_lines)]
+fn test_range_proof_fuzz<H: HashMode>() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     // 64 is big enough to provide a signal; 2048 starts to slow things down
@@ -1531,7 +2050,7 @@ fn test_range_proof_fuzz() {
     let set = fixed_and_pseudorandom_data(&rng, num_keys);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for _ in 0..50 {
@@ -1548,6 +2067,7 @@ fn test_range_proof_fuzz() {
                     Some(items[start].0),
                     Some(items[end].0),
                     &root_hash,
+                    H::ALGORITHM,
                     &range_proof,
                 )
                 .unwrap();
@@ -1563,8 +2083,14 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(&first), Some(items[end].0), None)
                     .unwrap();
-                verify_range_proof(Some(&first), Some(items[end].0), &root_hash, &range_proof)
-                    .unwrap();
+                verify_range_proof(
+                    Some(&first),
+                    Some(items[end].0),
+                    &root_hash,
+                    H::ALGORITHM,
+                    &range_proof,
+                )
+                .unwrap();
             }
             // Right edge is non-existent
             2 => {
@@ -1579,8 +2105,14 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(items[start].0), Some(&last), None)
                     .unwrap();
-                verify_range_proof(Some(items[start].0), Some(&last), &root_hash, &range_proof)
-                    .unwrap();
+                verify_range_proof(
+                    Some(items[start].0),
+                    Some(&last),
+                    &root_hash,
+                    H::ALGORITHM,
+                    &range_proof,
+                )
+                .unwrap();
             }
             // Both edges are non-existent
             3 => {
@@ -1596,7 +2128,14 @@ fn test_range_proof_fuzz() {
                     continue;
                 }
                 let range_proof = merkle.range_proof(Some(&first), Some(&last), None).unwrap();
-                verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
+                verify_range_proof(
+                    Some(&first),
+                    Some(&last),
+                    &root_hash,
+                    H::ALGORITHM,
+                    &range_proof,
+                )
+                .unwrap();
             }
             // Single element
             4 => {
@@ -1608,6 +2147,7 @@ fn test_range_proof_fuzz() {
                     Some(items[idx].0),
                     Some(items[idx].0),
                     &root_hash,
+                    H::ALGORITHM,
                     &range_proof,
                 )
                 .unwrap();
@@ -1617,11 +2157,12 @@ fn test_range_proof_fuzz() {
     }
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof where the end proof has been truncated (missing last node).
-fn test_bad_range_proof_truncated_end_proof() {
+fn test_bad_range_proof_truncated_end_proof<H: HashMode>() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -1642,22 +2183,29 @@ fn test_bad_range_proof_truncated_end_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, truncated_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        truncated_end,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(result.is_err(), "truncated end proof should be rejected");
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof where the start proof has been truncated (missing last node).
-fn test_bad_range_proof_truncated_start_proof() {
+fn test_bad_range_proof_truncated_start_proof<H: HashMode>() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -1678,25 +2226,32 @@ fn test_bad_range_proof_truncated_start_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        truncated_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(result.is_err(), "truncated start proof should be rejected");
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof containing a proof node with a value at an odd nibble length.
 // The odd-nibble-with-value check is defense-in-depth: in practice, corrupting a proof
 // node to have an odd-nibble key breaks its hash, so UnexpectedHash is returned first.
 // This test verifies the corruption is detected regardless of which check fires.
-fn test_bad_range_proof_value_at_odd_nibble() {
+fn test_bad_range_proof_value_at_odd_nibble<H: HashMode>() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -1721,12 +2276,18 @@ fn test_bad_range_proof_value_at_odd_nibble() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, corrupt_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        corrupt_end,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
         Some(b"cc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1735,15 +2296,129 @@ fn test_bad_range_proof_value_at_odd_nibble() {
     );
 }
 
+// Tampering an edge proof's terminal value node corrupts its hash relative to
+// the hash its parent commits to, so `verify_range_proof` rejects it with
+// `EdgeProofHashMismatch`. These two tests pin that the annotation names the
+// edge that actually tripped: corrupting the start proof reports `Left`, the
+// end proof reports `Right`. Without them, swapping `ProofEdge::{Left,Right}`
+// at the `verify_edge` call sites would go unnoticed.
+#[hash_mode]
+#[test]
+fn test_range_proof_left_edge_hash_mismatch<H: HashMode>() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle::<H, _, _, _>(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Corrupt only the start (left) edge proof's terminal node.
+    let mut corrupt_start = merkle.prove(b"aa").unwrap().into_mutable();
+    if let Some(node) = corrupt_start.last_mut() {
+        node.value_digest = Some(ValueDigest::Value(b"tampered".to_vec().into()));
+    }
+    let corrupt_start = corrupt_start.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(
+        corrupt_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+
+    let err = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
+                edge: crate::ProofEdge::Left,
+                ..
+            })
+        ),
+        "expected Left EdgeProofHashMismatch, got: {err:?}"
+    );
+}
+
+#[hash_mode]
+#[test]
+fn test_range_proof_right_edge_hash_mismatch<H: HashMode>() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle::<H, _, _, _>(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"aa").unwrap();
+
+    // Corrupt only the end (right) edge proof's terminal node; the start proof
+    // stays honest so the left edge passes and the failure lands on the right.
+    let mut corrupt_end = merkle.prove(b"cc").unwrap().into_mutable();
+    if let Some(node) = corrupt_end.last_mut() {
+        node.value_digest = Some(ValueDigest::Value(b"tampered".to_vec().into()));
+    }
+    let corrupt_end = corrupt_end.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(
+        start_proof,
+        corrupt_end,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+
+    let err = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        H::ALGORITHM,
+        &range_proof,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
+                edge: crate::ProofEdge::Right,
+                ..
+            })
+        ),
+        "expected Right EdgeProofHashMismatch, got: {err:?}"
+    );
+}
+
+#[hash_mode]
 #[test]
 // Rejects a range proof that hides a key-value pair on an edge proof path by
 // omitting it from key_values.
-fn test_bad_range_proof_hidden_value_on_edge_path() {
+fn test_bad_range_proof_hidden_value_on_edge_path<H: HashMode>() {
     // Create a trie where "b" is an intermediate branch on the path to "ba" and "bc".
     // "b" has a value AND is on the edge proof path for "bc".
     // The range ["a", "bc"] should include "b" and "ba", but we omit "b" from key_values.
     let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Use a non-existent start key so the start proof is an exclusion proof
@@ -1762,12 +2437,18 @@ fn test_bad_range_proof_hidden_value_on_edge_path() {
         ),
     ];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"a".as_slice()),
         Some(b"bc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1781,12 +2462,14 @@ fn test_bad_range_proof_hidden_value_on_edge_path() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof with a non-existent edge proof that has its final node removed.
 // This is the subtle case: since the bound doesn't match any key in key_values,
 // verify_edge passes the truncated proof as an exclusion proof (expected_value=None).
 // The corruption must be caught by the final root hash check.
-fn test_bad_range_proof_truncated_non_existent_edge() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_bad_range_proof_truncated_non_existent_edge<H: HashMode>() {
     let items: Vec<([u8; 32], [u8; 32])> = (0..10_u32)
         .map(|i| {
             let mut key = [0u8; 32];
@@ -1805,7 +2488,7 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
         })
         .collect();
 
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Use a non-existent start key (before the first item)
@@ -1829,12 +2512,18 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        truncated_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(start_bound.as_slice()),
         Some(end_bound.as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1843,11 +2532,12 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Rejects a range proof when start key > end key during verification.
-fn test_bad_range_proof_start_after_end() {
+fn test_bad_range_proof_start_after_end<H: HashMode>() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -1859,6 +2549,7 @@ fn test_bad_range_proof_start_after_end() {
         Some(b"dd".as_slice()),
         Some(b"bb".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1870,10 +2561,12 @@ fn test_bad_range_proof_start_after_end() {
     );
 }
 
+#[hash_mode]
 #[test]
 // Tests range_proof() with a limit parameter. When limit truncates, the
 // end proof should anchor at the last returned key, not the requested end_key.
-fn test_range_proof_with_limit() {
+#[expect(clippy::arithmetic_side_effects)]
+fn test_range_proof_with_limit<H: HashMode>() {
     let items: Vec<([u8; 32], [u8; 20])> = (0..10u32)
         .map(|i| {
             let mut key = [0u8; 32];
@@ -1892,7 +2585,7 @@ fn test_range_proof_with_limit() {
         })
         .collect();
 
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<H, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Request range [items[0], items[9]] with limit=3. Should return items[0..3].
@@ -1909,6 +2602,7 @@ fn test_range_proof_with_limit() {
         Some(&items[0].0),
         Some(&items[2].0),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     )
     .unwrap();
@@ -1923,27 +2617,26 @@ fn test_range_proof_with_limit() {
         Some(&items[0].0),
         Some(&items[9].0),
         &root_hash,
+        H::ALGORITHM,
         &full_proof,
     )
     .unwrap();
 }
 
+#[hash_mode]
 #[test]
-// Demonstrates that verify_range_proof does not verify that proof node values
-// match the corresponding values in key_values. A malicious prover can supply
-// correct proof nodes (with the real value) but incorrect key_values at an
-// intermediate proof-path position. Reconciliation silently overwrites the
-// wrong value with the proof's correct one, the hash check passes, and the
-// caller trusts the wrong key_values.
+// A malicious prover can supply correct proof nodes (carrying the real value)
+// alongside incorrect key_values at an intermediate proof-path position.
+// Verification rejects this with `ProofNodeValueMismatch` rather than letting
+// reconciliation overwrite the tampered value and pass the hash check.
 //
 // Trie: ("b", "v1"), ("ba", "v2"), ("bc", "v3")
 // Range: ["a", "bc"]
-// The end proof for "bc" traverses the "b" node (which carries "v1").
-// We change "b"'s value in key_values to "WRONG" — verification should fail
-// but currently passes.
-fn test_bad_range_proof_value_mismatch_on_proof_path() {
+// The end proof for "bc" traverses the "b" node (which carries "v1"), and "b"'s
+// value in key_values is changed to "WRONG".
+fn test_bad_range_proof_value_mismatch_on_proof_path<H: HashMode>() {
     let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // "a" is not in the trie → exclusion proof for start
@@ -1967,12 +2660,18 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
         ),
     ];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"a".as_slice()),
         Some(b"bc".as_slice()),
         &root_hash,
+        H::ALGORITHM,
         &range_proof,
     );
     assert!(
@@ -1990,9 +2689,10 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
 /// a branch node with children. Keys are \x10, \x20, and \x20\xab. Proof is
 /// generated from None to \x20. Children of the \x20 node should not be
 /// included in the proof.
+#[hash_mode]
 #[test]
-fn test_right_edge_boundary_prefix_of_terminal() {
-    let merkle = init_merkle([
+fn test_right_edge_boundary_prefix_of_terminal<H: HashMode>() {
+    let merkle = init_merkle::<H, _, _, _>([
         (b"\x10" as &[u8], b"a"),
         (b"\x20", b"b"),
         (b"\x20\xab", b"c"),
@@ -2011,7 +2711,14 @@ fn test_right_edge_boundary_prefix_of_terminal() {
     );
     // End proof should only have 2 proof nodes.
     assert_eq!(proof.end_proof().len(), 2);
-    verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
+    verify_range_proof(
+        None::<&[u8]>,
+        Some(b"\x20"),
+        &root_hash,
+        H::ALGORITHM,
+        &proof,
+    )
+    .unwrap();
 }
 
 /// Regression test: range proof verification must handle `ValueDigest::Hash`
@@ -2024,12 +2731,13 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 /// Setup: \x10 is a prefix of \x10\x20, making \x10 a branch with a value
 /// AND children. The 32-byte value at \x10 triggers `ValueDigest::Hash` after
 /// serialization round-trip.
-#[cfg(not(feature = "ethhash"))]
+// `ValueDigest::Hash` only arises from MerkleDB's ≥32-byte value capping,
+// which never happens under Ethereum hashing, so this stays MerkleDB-only.
 #[test]
-fn test_range_proof_with_hashed_value() {
+fn test_range_proof_with_hashed_value_merkledb() {
     // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle::<MerkleDbHash, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
         (b"\x30", b"other"),
@@ -2042,7 +2750,9 @@ fn test_range_proof_with_hashed_value() {
     // Serialize and deserialize to convert large values to Hash digests,
     // simulating a proof received from a peer over the network.
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // Confirm the start proof node carries a Hash digest after round-trip.
@@ -2057,7 +2767,15 @@ fn test_range_proof_with_hashed_value() {
     );
 
     // This must pass — the Hash digest matches the branch value.
-    verify_range_proof(Some(b"\x10"), Some(b"\x30"), &root_hash, &deserialized).unwrap();
+    crate::merkle::verify_range_proof(
+        Some(b"\x10"),
+        Some(b"\x30"),
+        &root_hash,
+        MerkleDbHash::ALGORITHM,
+        &deserialized,
+    )
+    .map(drop)
+    .unwrap();
 }
 
 /// Regression test: empty range proof with a Hash digest at an out-of-range
@@ -2065,13 +2783,14 @@ fn test_range_proof_with_hashed_value() {
 /// pairs inserted). The Hash proof node is out of range, so its value
 /// contribution comes from the parent's proof child hash — the branch value
 /// doesn't matter and reconcile should not reject.
-#[cfg(not(feature = "ethhash"))]
+// `ValueDigest::Hash` only arises from MerkleDB's ≥32-byte value capping, so
+// this stays MerkleDB-only (see `test_range_proof_with_hashed_value`).
 #[test]
-fn test_empty_range_proof_with_hashed_value() {
+fn test_empty_range_proof_with_hashed_value_merkledb() {
     // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
     // Range is past all keys — empty key-value list.
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle::<MerkleDbHash, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
     ]);
@@ -2081,15 +2800,25 @@ fn test_empty_range_proof_with_hashed_value() {
     let proof = merkle
         .range_proof(Some(b"\x30"), Some(b"\x40"), None)
         .unwrap();
-    assert!(proof.key_values().is_empty());
+    assert_eq!(proof.key_values(), []);
 
     // Serialize/deserialize to convert Value to Hash
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // This must pass — the Hash proof node is out of range.
-    verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
+    crate::merkle::verify_range_proof(
+        Some(b"\x30"),
+        Some(b"\x40"),
+        &root_hash,
+        MerkleDbHash::ALGORITHM,
+        &deserialized,
+    )
+    .map(drop)
+    .unwrap();
 }
 
 /// Multi-level trie with hashed values at multiple branch depths.
@@ -2107,10 +2836,11 @@ fn test_empty_range_proof_with_hashed_value() {
 /// from the proof node fallback in `compute_root_hash_with_proofs`. "abcdef"
 /// is in-range, its Hash matches the branch value via the fast path in
 /// `reconcile_branch_proof_node`.
-#[cfg(not(feature = "ethhash"))]
+// `ValueDigest::Hash` only arises from MerkleDB's ≥32-byte value capping, so
+// this stays MerkleDB-only (see `test_range_proof_with_hashed_value`).
 #[test]
-fn test_multi_level_range_proof_with_hashed_values() {
-    let merkle = init_merkle([
+fn test_multi_level_range_proof_with_hashed_values_merkledb() {
+    let merkle = init_merkle::<MerkleDbHash, _, _, _>([
         (b"abc" as &[u8], [0; 64].as_slice()),
         (b"abc123", [1; 64].as_slice()),
         (b"abcdef", [2; 64].as_slice()),
@@ -2126,7 +2856,9 @@ fn test_multi_level_range_proof_with_hashed_values() {
 
     // Serialize/deserialize to convert large values to Hash digests
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // Confirm all proof nodes with values carry Hash, not Value (all values >= 32 bytes).
@@ -2148,5 +2880,344 @@ fn test_multi_level_range_proof_with_hashed_values() {
     // This exercises:
     // - "abc" out-of-range: Hash fallback in compute_root_hash_with_proofs
     // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
-    verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
+    crate::merkle::verify_range_proof(
+        Some(b"abc123"),
+        Some(b"\xff"),
+        &root_hash,
+        MerkleDbHash::ALGORITHM,
+        &deserialized,
+    )
+    .map(drop)
+    .unwrap();
+}
+
+#[test]
+fn test_proven_right_edge() {
+    use std::borrow::Cow;
+
+    use crate::merkle::ProvenRange;
+    use crate::merkle::RightBoundary;
+    use crate::merkle::proven_right_edge;
+
+    // InRange(Some) — the end proof anchors at a real key, so that key is
+    // the inclusive proven bound. This is the truncated-reply shape.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::InRange(Some(b"\x10")),
+            Some(b"\x10"),
+            Some(b"\x10\x30")
+        ),
+        Some(Box::from(b"\x10".as_slice()))
+    );
+
+    // InRange(None) — an unbounded request stays unbounded.
+    assert_eq!(
+        proven_right_edge(&RightBoundary::InRange(None), Some(b"\x10"), None),
+        None
+    );
+
+    // OutOfRange with the requested bound below the terminal: the request is
+    // fully covered, so the requested bound is proven.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x10\x30")
+        ),
+        Some(Box::from(b"\x10\x30".as_slice()))
+    );
+
+    // OutOfRange with the requested bound exactly equal to the terminal: the
+    // guard is `end < k`, strictly, so equality does not count as covered.
+    // This strictness is load-bearing: with `<=` here, a `requested_end`
+    // exactly equal to the end-proof terminal would report as proven a key
+    // that provably *exists* in the source trie and was withheld —
+    // authorizing its local deletion.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x10\x50")
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // OutOfRange with the requested bound at or above the terminal: fall back
+    // to last_kv rather than claim the unrepresentable predecessor of the
+    // terminal. Conservative on purpose.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x99")
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // OutOfRange with no requested bound: same conservative fallback.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            None
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // The type is constructible and comparable — pins the field names.
+    let pr = ProvenRange {
+        start: Some(Box::from(b"\x05".as_slice())),
+        end: Some(Box::from(b"\x10".as_slice())),
+    };
+    assert_eq!(pr.start.as_deref(), Some(b"\x05".as_slice()));
+    assert_eq!(pr.end.as_deref(), Some(b"\x10".as_slice()));
+}
+
+#[hash_mode]
+#[test]
+fn test_verification_context_reports_truncated_right_edge<H: HashMode>() {
+    use std::num::NonZeroUsize;
+
+    use crate::verify_range_proof_structure;
+
+    let items: &[(&[u8], &[u8])] = &[
+        (b"\x05", b"a"),
+        (b"\x10", b"b"),
+        (b"\x20", b"c"),
+        (b"\x30", b"d"),
+    ];
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Ask for the whole keyspace but cap the reply at two pairs, so the
+    // responder truncates and the proof anchors at its own last key.
+    let limit = NonZeroUsize::new(2).unwrap();
+    let proof = merkle.range_proof(None, None, Some(limit)).unwrap();
+    assert_eq!(proof.key_values().len(), 2);
+
+    let ctx =
+        verify_range_proof_structure(&proof, root_hash, None, None, H::ALGORITHM, Some(limit))
+            .unwrap();
+
+    // The request was unbounded, but only `[.., 0x10]` is proven.
+    assert_eq!(ctx.end_key(), None);
+    assert_eq!(ctx.right_edge_key(), Some(b"\x10".as_slice()));
+}
+
+/// Simulates a syncer that fetches one key per range proof, starting from no
+/// start key and resuming wherever [`find_next_key_after_range_proof`] says,
+/// and checks that it retrieves every key up to the end bound once, in order.
+///
+/// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
+#[firewood_macros::hash_mode]
+#[test]
+fn test_range_proof_walk_resumes_after_last_proven_key<H: HashMode>() {
+    use std::num::NonZeroUsize;
+
+    use crate::find_next_key_after_range_proof;
+    use crate::proofs::lex_successor;
+    use crate::verify_range_proof_structure;
+
+    let keys: [&[u8]; 6] = [b"a", b"a\0", b"a\0\0", b"ab", b"b", b"c"];
+    let end_key: &[u8] = b"b";
+    let store: NodeStore<Committed, MemStore, H> = NodeStore::new_empty_committed(
+        Arc::new(MemStore::new(Vec::new())),
+        DeletedNodeTracking::Enabled,
+    );
+    let mut proposal = Merkle::from(store).fork().unwrap();
+    for key in keys {
+        proposal.insert(key, b"v".as_slice().into()).unwrap();
+    }
+    let merkle = proposal.hash();
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let limit_one = NonZeroUsize::new(1);
+    let expected: Vec<Box<[u8]>> = keys
+        .iter()
+        .filter(|&&key| key <= end_key)
+        .map(|&key| Box::from(key))
+        .collect();
+
+    let mut start_key: Option<Box<[u8]>> = None;
+    let mut fetched: Vec<Box<[u8]>> = Vec::new();
+    for _ in 0..expected.len() {
+        let proof = merkle
+            .range_proof(start_key.as_deref(), Some(end_key), limit_one)
+            .unwrap();
+        let ctx = verify_range_proof_structure(
+            &proof,
+            root_hash.clone(),
+            start_key.as_deref(),
+            Some(end_key),
+            H::ALGORITHM,
+            limit_one,
+        )
+        .unwrap();
+        fetched.extend(proof.key_values().iter().map(|(key, _)| key.clone()));
+
+        let (last_key, _) = proof.key_values().last().unwrap();
+        start_key =
+            find_next_key_after_range_proof(&proof, &ctx)
+                .unwrap()
+                .map(|(next_start, next_end)| {
+                    assert_eq!(next_start, lex_successor(last_key));
+                    assert_eq!(next_end.as_deref(), Some(end_key));
+                    next_start
+                });
+    }
+
+    assert_eq!(fetched, expected, "keys missing, repeated or out of order");
+    assert_eq!(start_key, None, "the sync continues past the end bound");
+}
+
+/// A trie as deep as the key-length bound allows survives a default stack.
+///
+/// The key-length bound exists to cap trie depth, because the walks that build
+/// and hash a trie during proof verification run once per level and a peer's
+/// keys decide how many levels there are. The bound is only worth its number if
+/// the deepest key it still admits is one the code survives, so this builds
+/// exactly that trie and proves the whole generate-and-verify round trip
+/// completes.
+#[hash_mode]
+#[test]
+fn test_max_bounded_depth_survives_default_stack<H: HashMode>() {
+    spawn_on_stack(DEFAULT_THREAD_STACK, || {
+        let mut items: KeyValuePairs = prefix_chain_keys(MAX_KEY_BYTES, 0x11)
+            .into_iter()
+            .map(|key| (key.into_boxed_slice(), Box::from(b"v".as_slice())))
+            .collect();
+        items.sort_unstable();
+        let merkle = init_merkle::<H, _, _, _>(items);
+        let root_hash = merkle.nodestore().root_hash().unwrap();
+        let proof = merkle.range_proof(None, None, None).unwrap();
+        verify_range_proof(
+            None::<&[u8]>,
+            None::<&[u8]>,
+            &root_hash,
+            H::ALGORITHM,
+            &proof,
+        )
+        .unwrap();
+    });
+}
+
+/// For every truncated proof over a trie with branch values and mid-byte
+/// branches, the remaining subtrees list, in key order, disjoint non-empty
+/// subtrees that hold every key after the proven right edge up to the
+/// requested end exactly once. Only the last may hold no key in that range.
+#[hash_mode]
+#[test]
+fn test_remaining_subtrees_cover_unfetched_keys<H: HashMode>() {
+    use crate::proofs::range::remaining_subtrees_after_range_proof;
+    use crate::verify_range_proof_structure;
+
+    let keys: [&[u8]; 12] = [
+        b"\x01",
+        b"\x01\x00",
+        b"\x01\x10",
+        b"\x01\x11",
+        b"\x01\x12\x34",
+        b"\x02",
+        b"\x20",
+        b"\x21",
+        b"\x30\x00",
+        b"\x30\x01",
+        b"\x3f",
+        b"\xf0",
+    ];
+    let merkle = init_merkle::<H, _, _, _>(keys.iter().map(|k| (*k, b"v".as_slice())));
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let nibbles = |key: &[u8]| NibblesIterator::new(key).collect::<Vec<u8>>();
+    let under = |key: &[u8], prefix: &PathBuf| {
+        nibbles(key).starts_with(&prefix.iter().map(|c| c.as_u8()).collect::<Vec<_>>())
+    };
+
+    let absent_ends: [&[u8]; 5] = [b"\x00", b"\x01\x13", b"\x25", b"\x30", b"\xff"];
+    let ends = keys
+        .iter()
+        .chain(&absent_ends)
+        .map(|&k| Some(k))
+        .chain([None]);
+    let limits = (NonZeroUsize::MIN..=NonZeroUsize::new(keys.len() + 1).unwrap())
+        .map(Some)
+        .chain([None]);
+    let pairs = [None, Some(b"\x01\x10".as_slice())]
+        .into_iter()
+        .flat_map(|start| ends.clone().map(move |end| (start, end)))
+        .filter(|(start, end)| start.zip(*end).is_none_or(|(s, e)| s <= e));
+    for (start_key, end_key) in pairs {
+        for limit in limits.clone() {
+            let proof = merkle.range_proof(start_key, end_key, limit).unwrap();
+            let ctx = verify_range_proof_structure(
+                &proof,
+                root_hash.clone(),
+                start_key,
+                end_key,
+                H::ALGORITHM,
+                limit,
+            )
+            .unwrap();
+            let subtrees = remaining_subtrees_after_range_proof(&proof, &ctx).unwrap();
+            let unfetched: Vec<&[u8]> = keys
+                .iter()
+                .copied()
+                .filter(|&k| ctx.right_edge_key().is_some_and(|edge| k > edge))
+                .filter(|&k| end_key.is_none_or(|end| k <= end))
+                .collect();
+            let context = format!(
+                "start {start_key:?}, end {end_key:?}, limit {limit:?}, subtrees {subtrees:?}"
+            );
+
+            if ctx.right_edge_key() == end_key {
+                assert!(subtrees.is_empty(), "proof covers the request: {context}");
+            }
+            assert!(subtrees.is_sorted(), "{context}");
+            for key in &unfetched {
+                let holders = subtrees.iter().filter(|p| under(key, p)).count();
+                assert_eq!(holders, 1, "{key:?} in {holders} subtrees: {context}");
+            }
+            for prefix in &subtrees {
+                assert!(
+                    keys.iter().any(|k| under(k, prefix)),
+                    "empty {prefix:?}: {context}"
+                );
+            }
+            for prefix in subtrees.split_last().map_or(&[][..], |(_, init)| init) {
+                assert!(
+                    unfetched.iter().any(|k| under(k, prefix)),
+                    "{prefix:?} holds nothing unfetched: {context}"
+                );
+            }
+        }
+    }
+}
+
+/// An end proof whose terminal sorts past the proven right edge lists the
+/// terminal itself, since its own value is unfetched.
+#[hash_mode]
+#[test]
+fn test_remaining_subtrees_include_out_of_range_terminal<H: HashMode>() {
+    use crate::proofs::range::remaining_subtrees_after_range_proof;
+    use crate::verify_range_proof_structure;
+
+    let merkle = init_merkle::<H, _, _, _>(OUT_OF_RANGE_ITEMS.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    let wider_end: &[u8] = b"\x30";
+    let ctx = verify_range_proof_structure(
+        &proof,
+        root_hash,
+        Some(OUT_OF_RANGE_START),
+        Some(wider_end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(ctx.right_edge_key(), Some(b"\x20\x00".as_slice()));
+    assert_eq!(
+        remaining_subtrees_after_range_proof(&proof, &ctx).unwrap(),
+        [nibble_path(&[2, 5, 8, 0])]
+    );
 }

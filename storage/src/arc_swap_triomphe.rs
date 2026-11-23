@@ -27,7 +27,7 @@
 //! which is what `arc_swap`'s `RefCnt for Option<T>` relies on to distinguish
 //! `Some` from `None`.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "arc_swap::RefCnt requires unsafe trait methods; sealed bridge for triomphe::Arc"
 )]

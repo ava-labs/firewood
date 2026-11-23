@@ -5,18 +5,23 @@ use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use metrics::{Key, Label, with_local_recorder};
-use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+use metrics::Key;
+use metrics::Label;
+use metrics::with_local_recorder;
+use metrics_util::debugging::DebugValue;
+use metrics_util::debugging::DebuggingRecorder;
+use rand::Rng;
+#[expect(
+    clippy::disallowed_types,
+    reason = "we are implementing the alternative"
+)]
+use rand::SeedableRng;
+use rand::TryRng;
 #[expect(
     clippy::disallowed_types,
     reason = "we are implementing the alternative"
 )]
 use rand::rngs::StdRng;
-#[expect(
-    clippy::disallowed_types,
-    reason = "we are implementing the alternative"
-)]
-use rand::{Rng, SeedableRng, TryRng};
 
 #[derive(Debug, Clone)]
 #[must_use]
@@ -204,6 +209,31 @@ impl TestRecorder {
         key_name: &'static str,
         labels: &[(&'static str, &'static str)],
     ) -> u64 {
+        self.value(key_name, labels).map_or(0, |val| match val {
+            DebugValue::Counter(c) => c,
+            _ => 0,
+        })
+    }
+
+    /// Returns the gauge value for the given key and labels, or `None` if the
+    /// gauge was never set.
+    #[must_use]
+    pub fn gauge_value(
+        &self,
+        key_name: &'static str,
+        labels: &[(&'static str, &'static str)],
+    ) -> Option<f64> {
+        match self.value(key_name, labels)? {
+            DebugValue::Gauge(g) => Some(g.0),
+            _ => None,
+        }
+    }
+
+    fn value(
+        &self,
+        key_name: &'static str,
+        labels: &[(&'static str, &'static str)],
+    ) -> Option<DebugValue> {
         let key = if labels.is_empty() {
             Key::from_name(key_name)
         } else {
@@ -211,16 +241,11 @@ impl TestRecorder {
             Key::from_name(key_name).with_extra_labels(label_vec)
         };
 
-        // Return the count value
         self.snapshotter()
             .snapshot()
             .into_vec()
             .into_iter()
             .find(|(k, _, _, _)| *k.key() == key)
             .map(|(_, _, _, v)| v)
-            .map_or(0, |val| match val {
-                DebugValue::Counter(c) => c,
-                _ => 0,
-            })
     }
 }

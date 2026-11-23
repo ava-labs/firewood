@@ -53,8 +53,6 @@ firewood_metrics::define_metrics! {
         CACHE_MEMORY_LIMIT             = "firewood_node_cache_limit_bytes",
         /// Current database file size (bytes)
         DATABASE_SIZE_BYTES            = "firewood_database_size_bytes",
-        /// Number of entries per free-list size class
-        FREE_LIST_ENTRIES              = "firewood_free_list_entries",
     },
     histograms: {
         /// Duration of node flush operations

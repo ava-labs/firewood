@@ -14,18 +14,30 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Debug;
+use std::io::Error;
+use std::io::Read;
+use std::io::Write;
+
+use bitfield::bitfield;
+pub use branch::BranchNode;
+pub use branch::Child;
+pub use children::Children;
+pub use children::ChildrenSlots;
+pub use children::DenseChildren;
+use enum_as_inner::EnumAsInner;
+use integer_encoding::VarInt;
+use integer_encoding::VarIntReader as _;
+pub use leaf::LeafNode;
+
+use crate::HashMode;
+use crate::LinearAddress;
+use crate::Path;
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::SharedNode;
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
-use bitfield::bitfield;
-use branch::Serializable as _;
-pub use branch::{BranchNode, Child};
-pub use children::{Children, ChildrenSlots};
-use enum_as_inner::EnumAsInner;
-use integer_encoding::{VarInt, VarIntReader as _};
-pub use leaf::LeafNode;
-use std::fmt::Debug;
-use std::io::{Error, Read, Write};
 
 pub mod branch;
 pub mod children;
@@ -34,8 +46,8 @@ pub mod path;
 pub mod persist;
 /// A node, either a Branch or Leaf
 
-// TODO: explain why Branch is boxed but Leaf is not
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
+// TODO(rkuris): explain why Branch is boxed but Leaf is not
+#[derive(PartialEq, Eq, Debug, EnumAsInner)]
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
@@ -104,7 +116,7 @@ impl Default for LeafFirstByte {
     }
 }
 
-// TODO: Unstable extend_reserve re-implemented here
+// TODO(rkuris): Unstable extend_reserve re-implemented here
 // Extend<A>::extend_reserve is unstable so we implement it here
 // see https://github.com/rust-lang/rust/issues/72631
 pub trait ExtendableBytes: Write {
@@ -229,13 +241,14 @@ impl Node {
     /// The first byte of the encoding is the area size index, which is calculated from the total
     /// size of the encoded node. This method returns the `AreaIndex` for the encoded node.
     ///
-    /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
+    /// TODO(rkuris): We could pack two bytes of the partial path into one and handle the odd byte length
     ///
     /// # Errors
     ///
     /// Returns an error if the encoded size exceeds the maximum area size.
-    pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
+    pub fn as_bytes<H, T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
     where
+        H: HashMode,
         T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
     {
         // Push placeholder for area size index (will be updated later)
@@ -284,7 +297,7 @@ impl Node {
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        H::write_child_hash(hash, encoded)?;
                     }
                 } else {
                     for (position, child) in child_iter {
@@ -293,7 +306,7 @@ impl Node {
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        H::write_child_hash(hash, encoded)?;
                     }
                 }
             }
@@ -335,8 +348,9 @@ impl Node {
         Ok(area_index)
     }
 
-    /// Given a reader, return a [Node] from those bytes
-    pub fn from_reader(mut serialized: &mut impl Read) -> Result<Self, Error> {
+    /// Given a reader, return a [Node] from those bytes, deserializing child
+    /// hashes under the scheme `H`.
+    pub fn from_reader<H: HashMode>(serialized: &mut impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
             255 => {
                 // this is a freed area
@@ -344,7 +358,7 @@ impl Node {
             }
             first_byte if first_byte & 1 == 1 => {
                 let partial_path = read_path_with_overflow_length(
-                    &mut serialized,
+                    &mut *serialized,
                     first_byte >> 1,
                     LEAF_PARTIAL_PATH_LEN_OVERFLOW,
                 )?;
@@ -362,7 +376,7 @@ impl Node {
                 let childcount = branch_first_byte.number_children() as usize;
 
                 let partial_path = read_path_with_overflow_length(
-                    &mut serialized,
+                    &mut *serialized,
                     branch_first_byte.partial_path_length(),
                     BRANCH_PARTIAL_PATH_LEN_OVERFLOW,
                 )?;
@@ -379,12 +393,12 @@ impl Node {
                 if childcount == 0 {
                     // branch is full of all children
                     for (_, child) in &mut children {
-                        // TODO: we can read them all at once
+                        // TODO(rkuris): we can read them all at once
                         let mut address_buf = [0u8; 8];
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = HashType::from_reader(&mut serialized)?;
+                        let hash = H::read_child_hash(&mut *serialized)?;
 
                         *child = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
@@ -408,7 +422,7 @@ impl Node {
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = HashType::from_reader(&mut serialized)?;
+                        let hash = H::read_child_hash(&mut *serialized)?;
 
                         children[position] = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
@@ -536,13 +550,27 @@ impl std::fmt::Display for DisplayTruncatedHex<'_> {
 }
 
 #[cfg(test)]
-mod test {
-    #![expect(clippy::unwrap_used)]
+mod snapshot_tests;
 
-    use crate::node::{BranchNode, LeafNode, Node};
-    use crate::{Child, Children, LinearAddress, NibblesIterator, Path};
+#[cfg(test)]
+mod test {
+    use firewood_macros::hash_mode;
     use test_case::test_case;
 
+    use crate::Child;
+    use crate::Children;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::LinearAddress;
+    use crate::MerkleDbHash;
+    use crate::NibblesIterator;
+    use crate::NodeHashAlgorithm;
+    use crate::Path;
+    use crate::node::BranchNode;
+    use crate::node::LeafNode;
+    use crate::node::Node;
+
+    #[hash_mode]
     #[test_case(
         Node::Leaf(LeafNode {
             partial_path: Path::from(vec![0, 1, 2, 3]),
@@ -567,8 +595,10 @@ mod test {
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: Children::from_fn(|_|
-                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+        // Each child's hash starts with its own nibble so a decode that pairs
+        // slots with the wrong wire entries fails the round-trip comparison.
+        children: Children::from_fn(|pc|
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| if i == 0 { pc.as_u8() } else { i as u8 }).into()))
         )})), 652; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
@@ -590,27 +620,77 @@ than 126 bytes as the length would be encoded in multiple bytes.
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
-    // When ethhash is enabled, we don't actually check the `expected_length`
-    fn test_serialize_deserialize(
-        node: Node,
-        #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
-    ) {
-        use crate::node::Node;
+    fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
         use std::io::Cursor;
 
+        use crate::node::Node;
+
         let mut serialized = Vec::new();
-        let _area_index = node.as_bytes(&mut serialized).unwrap();
-        #[cfg(not(feature = "ethhash"))]
-        assert_eq!(serialized.len(), expected_length);
+        let _area_index = node.as_bytes::<H, _>(&mut serialized).unwrap();
+        if H::ALGORITHM == NodeHashAlgorithm::MerkleDB {
+            assert_eq!(serialized.len(), expected_length);
+        }
         let mut cursor = Cursor::new(&serialized);
         cursor.set_position(1);
-        let deserialized = Node::from_reader(&mut cursor).unwrap();
+        let deserialized = Node::from_reader::<H>(&mut cursor).unwrap();
 
         assert_eq!(node, deserialized);
     }
 
+    /// Golden test locking the on-disk byte layout of a branch node's
+    /// child-hash region in eth mode: an 8-byte native-endian address followed
+    /// by the hash codec output (`0x00` + 32 raw bytes for a full hash). These
+    /// bytes must stay byte-for-byte stable so existing databases keep working.
     #[test]
-    fn test_area_index_with_non_empty_buffer() {
+    fn test_eth_child_hash_region_exact_bytes() {
+        // A partial branch with a single child at slot 15, no value. Distinct
+        // per-byte values make a mismatch easy to spot in the failure hex dump.
+        let hash_bytes: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let child_hash: crate::HashType = hash_bytes.into();
+        let node = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from(vec![0, 1]),
+            value: None,
+            children: Children::from_fn(|i| {
+                if i.as_u8() == 15 {
+                    Some(Child::AddressWithHash(
+                        LinearAddress::new(1).unwrap(),
+                        child_hash.clone(),
+                    ))
+                } else {
+                    None
+                }
+            }),
+        }));
+
+        let mut serialized = Vec::new();
+        node.as_bytes::<EthHash, _>(&mut serialized).unwrap();
+
+        // The child record is the tail of the encoding.
+        let mut expected_tail = Vec::new();
+        expected_tail.push(15u8); // child-slot nibble varint (single byte)
+        expected_tail.extend_from_slice(&1u64.to_ne_bytes()); // address
+        expected_tail.push(0x00); // full-hash discriminant
+        expected_tail.extend_from_slice(&hash_bytes);
+
+        assert!(
+            serialized.ends_with(&expected_tail),
+            "child-hash region changed; got {}",
+            hex::encode(&serialized)
+        );
+
+        // And the whole thing must round-trip.
+        let mut cursor = std::io::Cursor::new(&serialized);
+        cursor.set_position(1);
+        assert_eq!(node, Node::from_reader::<EthHash>(&mut cursor).unwrap());
+    }
+
+    #[hash_mode]
+    #[test]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "fixture buffer sizes are bounded"
+    )]
+    fn test_area_index_with_non_empty_buffer<H: HashMode>() {
         use crate::node::Node;
         use crate::nodestore::AreaIndex;
 
@@ -622,12 +702,12 @@ than 126 bytes as the length would be encoded in multiple bytes.
 
         // First, encode into an empty buffer to get the expected area index
         let mut empty_buffer = Vec::new();
-        let expected_area_index = node.as_bytes(&mut empty_buffer).unwrap();
+        let expected_area_index = node.as_bytes::<H, _>(&mut empty_buffer).unwrap();
         let expected_size = empty_buffer.len();
 
         // Now encode into a non-empty buffer with a 100-byte prefix
         let mut non_empty_buffer = vec![0xFF; 100];
-        let area_index = node.as_bytes(&mut non_empty_buffer).unwrap();
+        let area_index = node.as_bytes::<H, _>(&mut non_empty_buffer).unwrap();
 
         // The area index should be the same regardless of buffer prefix
         assert_eq!(
@@ -655,5 +735,155 @@ than 126 bytes as the length would be encoded in multiple bytes.
             area_index,
             "Area index should be calculated from node size only"
         );
+    }
+}
+
+impl Clone for Node {
+    /// Hand-written so the copy of a deep trie re-enters through
+    /// `ensure_stack` at every level. A derived clone recurses
+    /// once per trie level, and trie depth is peer-controlled during proof
+    /// verification.
+    fn clone(&self) -> Self {
+        match self {
+            // A leaf owns no children, so this cannot recurse.
+            Node::Leaf(leaf) => Node::Leaf(leaf.clone()),
+            Node::Branch(branch) => crate::stack::ensure_stack(|| Node::Branch(branch.clone())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod clone_tests {
+    use test_case::test_case;
+
+    use super::*;
+    use crate::HashType;
+    use crate::MaybePersistedNode;
+    use crate::TrieHash;
+
+    /// Builds a chain `depth` branches deep, ending in a leaf. The top branch
+    /// also holds an `AddressWithHash` child and a leaf child. `fan_out` covers
+    /// the child kinds and shapes this spine does not.
+    fn chain(depth: usize) -> Node {
+        let mut node = Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator([1u8, 2].into_iter()),
+            value: Box::from(b"leaf".as_slice()),
+        });
+
+        for level in 0..depth {
+            let mut children = Children::new();
+            children[PathComponent::try_new(0).unwrap()] = Some(Child::Node(node));
+            if level == depth.saturating_sub(1) {
+                // Only at the top, so the chain itself stays a single spine.
+                children[PathComponent::try_new(1).unwrap()] = Some(Child::AddressWithHash(
+                    LinearAddress::new(64).unwrap(),
+                    HashType::from(TrieHash::from([7u8; 32])),
+                ));
+                children[PathComponent::try_new(2).unwrap()] =
+                    Some(Child::Node(Node::Leaf(LeafNode {
+                        partial_path: Path::new(),
+                        value: Box::from(b"sibling".as_slice()),
+                    })));
+            }
+            node = Node::Branch(Box::new(BranchNode {
+                partial_path: Path::from_nibbles_iterator(
+                    [u8::try_from(level % 16).unwrap()].into_iter(),
+                ),
+                value: (level % 3 == 0).then(|| Box::from(b"v".as_slice())),
+                children,
+            }));
+        }
+        node
+    }
+
+    fn leaf(pc: PathComponent) -> Node {
+        Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([pc.as_u8()].as_slice()),
+        })
+    }
+
+    /// Every slot holds a child, cycling through the four kinds, with a branch in
+    /// every fourth slot including the last. Branch children hold branches of
+    /// their own down to `depth`, so a branch clone re-enters `Node::clone` for
+    /// several children, the last slot among them.
+    fn fan_out(depth: usize) -> Node {
+        Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: Some(Box::from(b"root".as_slice())),
+            children: Children::from_fn(|pc| match pc.as_u8() % 4 {
+                0 => Some(Child::Node(leaf(pc))),
+                1 => Some(Child::AddressWithHash(
+                    LinearAddress::new(u64::from(pc.as_u8()).saturating_add(64)).unwrap(),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                2 => Some(Child::MaybePersisted(
+                    MaybePersistedNode::from(SharedNode::new(leaf(pc))),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                _ if depth == 0 => Some(Child::Node(leaf(pc))),
+                _ => Some(Child::Node(fan_out(depth.saturating_sub(1)))),
+            }),
+        }))
+    }
+
+    /// A clone equals its source. `Node` derives `PartialEq`, which compares the
+    /// whole subtree, so this is an exact oracle rather than a spot check. The
+    /// cases cover each shape a copy can take.
+    #[test_case(chain, 0 ; "a leaf alone")]
+    #[test_case(chain, 1 ; "one branch with leaf and hashed children")]
+    #[test_case(chain, 2 ; "branch within a branch")]
+    #[test_case(fan_out, 0 ; "every Child variant, no branch children")]
+    #[test_case(fan_out, 1 ; "branch children in four slots including the last")]
+    fn clone_equals_source(fixture: fn(usize) -> Node, depth: usize) {
+        let original = fixture(depth);
+        assert_eq!(original.clone(), original);
+    }
+
+    /// The copy is independent: mutating it must not touch the source.
+    #[test]
+    fn clone_is_deep_not_shared() {
+        let original = chain(5);
+        let mut copy = original.clone();
+
+        // Mutate deep inside the copy, not at its root, so a shallow copy that
+        // shared any subtree would show up here.
+        let mut cursor = copy.as_branch_mut().expect("chain(5) is a branch");
+        for _ in 0..3 {
+            let slot = PathComponent::try_new(0).unwrap();
+            let Some(Child::Node(Node::Branch(next))) = cursor.children[slot].as_mut() else {
+                panic!("the chain descends through slot 0")
+            };
+            cursor = next;
+        }
+        cursor.value = Some(Box::from(b"mutated".as_slice()));
+
+        assert_ne!(copy, original, "the mutation must be visible in the copy");
+        assert_eq!(
+            original,
+            chain(5),
+            "the source must still equal a freshly built chain"
+        );
+    }
+
+    fn clone_then_drop(node: Node) {
+        let copy = node.clone();
+        drop(copy);
+        drop(node);
+    }
+
+    /// A 4,096-level chain is freed, or cloned and then freed, on a 256 KiB
+    /// thread. Completing is the assertion, since a stack overflow aborts the
+    /// process rather than panicking. The copy is not compared with its source,
+    /// because `PartialEq` is derived and recurses once per level.
+    #[test_case(drop ; "dropping the chain")]
+    #[test_case(clone_then_drop ; "cloning the chain, then dropping both")]
+    fn deep_chain_survives_a_small_stack(op: fn(Node)) {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || op(chain(4096)))
+            .unwrap()
+            .join()
+            .expect("the guard thread must not panic");
     }
 }

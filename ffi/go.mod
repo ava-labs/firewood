@@ -2,9 +2,12 @@ module github.com/ava-labs/firewood/ffi
 
 // Changes to the go version should be replicated in:
 //   - ffi/go.mod (here)
-//   - ffi/tests/eth/go.mod
-//   - ffi/tests/firewood/go.mod
-go 1.25.8
+//   - ffi/tests/go.mod
+//   - ffi/tools/external/go.mod
+//   - infra/toolchain-version.sh Golang version hash
+//   - ffi/flake.nix avalanchego commit hash
+// Consider updating the golangci-lint version.
+go 1.26.10
 
 require (
 	github.com/prometheus/client_golang v1.22.0
@@ -13,7 +16,6 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/sync v0.19.0
 	golang.org/x/tools v0.42.0
-	google.golang.org/protobuf v1.36.5
 )
 
 require (
@@ -25,8 +27,10 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
+	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

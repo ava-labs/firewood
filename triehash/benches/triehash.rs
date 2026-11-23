@@ -15,12 +15,17 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use ethereum_types::H256;
 use firewood_triehash::trie_root;
 use keccak_hasher::KeccakHasher;
-use tiny_keccak::{Hasher, Keccak};
-use trie_standardmap::{Alphabet, StandardMap, ValueMode};
+use tiny_keccak::Hasher;
+use tiny_keccak::Keccak;
+use trie_standardmap::Alphabet;
+use trie_standardmap::StandardMap;
+use trie_standardmap::ValueMode;
 
 fn keccak256(input: &[u8]) -> [u8; 32] {
     let mut keccak256 = Keccak::v256();

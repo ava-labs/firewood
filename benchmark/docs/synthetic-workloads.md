@@ -104,25 +104,25 @@ This test repeatedly updates the first row.
 
 Since the benchmark is in two phases, you may want to create the database first and then
 examine the steady-state performance second. This can easily be accomplished with a few
-command line options.
+command line options. Note: the benchmark requires `--hash-mode` with either `merkle-db` or `ethereum`.
 
 To create test databases, use the following command:
 
 ```sh
-    nohup time cargo run --profile maxperf --bin benchmark -- -n 10000 create
+    nohup time cargo run --profile maxperf --bin benchmark -- --hash-mode merkle-db -n 10000 create
 ```
 
 Then, you can look at nohup.out and see how long the database took to initialize. Then, to run
 the second phase, use:
 
 ```sh
-    nohup time cargo run --profile maxperf --bin benchmark -- -n 10000 zipf
+    nohup time cargo run --profile maxperf --bin benchmark -- --hash-mode merkle-db -n 10000 zipf
 ```
 
 If you're looking for detailed logging, there are some command line options to enable it. For example, to enable debug logging for the single benchmark, you can use the following:
 
 ```sh
-    cargo run --profile release --bin benchmark -- -l debug -n 10000 single
+    cargo run --profile release --bin benchmark -- --hash-mode merkle-db -l debug -n 10000 single
 ```
 
 ## Using opentelemetry

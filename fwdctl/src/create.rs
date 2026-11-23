@@ -1,16 +1,48 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use clap::{Args, value_parser};
+use clap::Args;
+use clap::ValueEnum;
+use clap::value_parser;
 use firewood::api;
-use firewood::db::{Db, DbConfig};
+use firewood::db::DbConfig;
+use firewood::open;
 
 use crate::DatabasePath;
+
+// Clap-facing mirror of firewood_storage::NodeHashAlgorithm. Keeping ValueEnum
+// here avoids adding a Clap dependency to the storage crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+enum HashModeArg {
+    #[value(name = "merkle-db")]
+    MerkleDB,
+    #[value(name = "ethereum")]
+    Ethereum,
+}
+
+impl From<HashModeArg> for firewood_storage::NodeHashAlgorithm {
+    fn from(hash_mode: HashModeArg) -> Self {
+        match hash_mode {
+            HashModeArg::MerkleDB => Self::MerkleDB,
+            HashModeArg::Ethereum => Self::Ethereum,
+        }
+    }
+}
 
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
     pub database: DatabasePath,
+
+    /// The node hash algorithm to persist in the new database header.
+    #[arg(
+        long,
+        visible_alias = "hash-mode",
+        value_enum,
+        required = true,
+        help = "The node hash algorithm for the new database"
+    )]
+    node_hash_algorithm: HashModeArg,
 
     #[arg(
         long,
@@ -46,17 +78,18 @@ pub struct Options {
 }
 
 pub(super) fn new(opts: &Options) -> DbConfig {
-    DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
-        .truncate(opts.truncate)
-        .build()
+    DbConfig::builder().truncate(opts.truncate).build()
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{db_config:?}\n");
 
-    let db = Db::new(opts.database.dbpath.clone(), db_config)?;
+    let db = open(
+        opts.database.dbpath.clone(),
+        opts.node_hash_algorithm.into(),
+        db_config,
+    )?;
     println!(
         "created firewood database in {}",
         opts.database.dbpath.display()

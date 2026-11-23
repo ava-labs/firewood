@@ -3,19 +3,31 @@
 
 // hash benchmarks; run with 'cargo bench'
 
-use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::Merkle;
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::{BatchOp, DbConfig};
-use firewood_storage::{MemStore, NodeHashAlgorithm, NodeStore};
-use pprof::ProfilerGuard;
-use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
+
+use criterion::BatchSize;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::profiler::Profiler;
+use firewood::Merkle;
+use firewood::api;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeStore;
+use pprof::ProfilerGuard;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use tempfile::TempDir;
 
 // To enable flamegraph output
@@ -60,17 +72,18 @@ impl Profiler for FlamegraphProfiler {
 
 // This benchmark peeks into the merkle layer and times how long it takes
 // to insert NKEYS with a key length of KEYSIZE
-fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criterion) {
+fn bench_merkle<H: HashMode, const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criterion) {
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
 
     criterion
-        .benchmark_group("Merkle")
+        .benchmark_group(format!("Merkle/{:?}", H::ALGORITHM))
         .sample_size(30)
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = Arc::new(MemStore::default());
-                    let nodestore = NodeStore::new_empty_proposal(store);
+                    let store = Arc::new(MemStore::new(Vec::new()));
+                    let nodestore: NodeStore<_, _, H> =
+                        NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
                     let keys: Vec<Vec<u8>> =
@@ -93,36 +106,35 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
 }
 
 #[expect(clippy::unwrap_used)]
-fn bench_db<const N: usize>(criterion: &mut Criterion) {
+fn bench_db<H: HashMode, const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
 
     criterion
-        .benchmark_group("Db")
+        .benchmark_group(format!("Db/{:?}", H::ALGORITHM))
         .sample_size(30)
         .bench_function("commit", |b| {
             b.iter_batched(
                 || {
-                    let batch_ops: Vec<_> =
+                    let batch_ops: api::OwnedBatch =
                         repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
                             .map(|key: Vec<_>| BatchOp::Put {
-                                key,
-                                value: vec![b'v'],
+                                key: key.into_boxed_slice(),
+                                value: vec![b'v'].into_boxed_slice(),
                             })
                             .take(N)
-                            .collect();
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
                     batch_ops
                 },
                 |batch_ops| {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
-                    let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
-                        .truncate(true)
-                        .build();
-                    let db = firewood::db::Db::new(db_path, cfg).unwrap();
+                    let cfg = DbConfig::builder().truncate(true).build();
+                    let db = open(db_path, H::ALGORITHM, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
+                    db.close().unwrap();
                 },
                 BatchSize::SmallInput,
             );
@@ -132,7 +144,12 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(FlamegraphProfiler::Init(100));
-    targets = bench_merkle::<3, 4>, bench_merkle<3, 32>, bench_db::<100>
+    targets = bench_merkle::<MerkleDbHash, 3, 4>,
+              bench_merkle::<MerkleDbHash, 3, 32>,
+              bench_db::<MerkleDbHash, 100>,
+              bench_merkle::<EthHash, 3, 4>,
+              bench_merkle::<EthHash, 3, 32>,
+              bench_db::<EthHash, 100>
 }
 
 criterion_main!(benches);

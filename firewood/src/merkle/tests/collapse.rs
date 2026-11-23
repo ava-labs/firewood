@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_macros::hash_mode;
+
 use super::*;
 
 /// Tests `collapse_root_to_path` with no range check. The merkle trie
@@ -8,9 +10,10 @@ use super::*;
 /// with a target of \x10. Since \x01 is not on the path from the root
 /// to the target, nibble 0 is stripped from the root. Path compression
 /// changes the root's partial path from a length of 0 to a length of 2.
+#[hash_mode]
 #[test]
-fn test_collapse_root_to_path() {
-    let mut merkle = create_in_memory_merkle();
+fn test_collapse_root_to_path<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
 
     // \x01 → nibbles [0, 1], \x10 → nibbles [1, 0]
@@ -37,9 +40,10 @@ fn test_collapse_root_to_path() {
 /// of the remaining nodes. In this example, the target is \x10, the range is
 /// [0x0], [0xf], and the root (which is on-path) has a child in the range.
 /// Therefore we expect to receive an `EndRootMismatch` error.
+#[hash_mode]
 #[test]
-fn test_collapse_root_to_path_rejects() {
-    let mut merkle = create_in_memory_merkle();
+fn test_collapse_root_to_path_rejects<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
 
     // \x01 → nibbles [0, 1], \x10 → nibbles [1, 0]
@@ -53,7 +57,13 @@ fn test_collapse_root_to_path_rejects() {
     // Collapse toward [1, 0] but nibble 0 is in range [0x0, 0xf].
     // Should reject because collapsing would strip a child that is within the
     // range, indicating tampered batch_ops.
-    let result = merkle.collapse_root_to_path(&[pc(1), pc(0)], Some((&[0x0], &[0xf])));
+    let result = merkle.collapse_root_to_path(
+        &[pc(1), pc(0)],
+        Some(CollapseRange {
+            start: &[0x0],
+            end: Some(&[0xf]),
+        }),
+    );
 
     assert!(matches!(
         result,
@@ -61,10 +71,11 @@ fn test_collapse_root_to_path_rejects() {
     ));
 }
 
+#[hash_mode]
 #[test]
-fn test_collapse_branch_to_path() {
+fn test_collapse_branch_to_path<H: HashMode>() {
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle
         .insert(b"\x10\x21", Box::from(b"a".as_slice()))
@@ -90,10 +101,11 @@ fn test_collapse_branch_to_path() {
     assert!(merkle.get_value(b"\x10\x30").unwrap().is_some());
 }
 
+#[hash_mode]
 #[test]
-fn test_collapse_branch_to_path_rejects() {
+fn test_collapse_branch_to_path_rejects<H: HashMode>() {
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle
         .insert(b"\x10\x21", Box::from(b"a".as_slice()))
@@ -112,7 +124,10 @@ fn test_collapse_branch_to_path_rejects() {
     let result = merkle.collapse_branch_to_path(
         &[pc(1), pc(0)],
         &[pc(1), pc(0), pc(2), pc(1)],
-        Some((&[0x1, 0x0, 0x2, 0x0], &[0x1, 0x0, 0x2, 0xf])),
+        Some(CollapseRange {
+            start: &[0x1, 0x0, 0x2, 0x0],
+            end: Some(&[0x1, 0x0, 0x2, 0xf]),
+        }),
     );
     assert!(matches!(
         result,

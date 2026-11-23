@@ -1,10 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use parking_lot::Mutex;
-use std::{fmt::Display, ops::Deref, sync::Arc};
+use std::fmt::Display;
+use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
+use parking_lot::Mutex;
+
+use crate::FileIoError;
+use crate::LinearAddress;
+use crate::Node;
+use crate::NodeReader;
+use crate::SharedNode;
 
 /// A node that is either in memory or on disk.
 ///
@@ -144,6 +151,18 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Returns the address only when the node is fully persisted, i.e. its
+    /// contents are on disk and a caller may drop any in-memory copy and still
+    /// be able to re-read it. Unlike [`Self::as_linear_address`] this excludes
+    /// `Allocated`, whose contents have an address but have not been written yet.
+    #[must_use]
+    pub fn persisted_address(&self) -> Option<LinearAddress> {
+        match &*self.0.lock() {
+            MaybePersisted::Persisted(address) => Some(*address),
+            MaybePersisted::Unpersisted(_) | MaybePersisted::Allocated(_, _) => None,
+        }
+    }
+
     /// Returns a reference to the unpersisted node if it is unpersisted.
     ///
     /// # Returns
@@ -247,18 +266,28 @@ enum MaybePersisted {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test {
+    use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
-    use crate::{LeafNode, MemStore, Node, NodeStore, Path};
-
     use super::*;
+    use crate::Committed;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::LeafNode;
+    use crate::MemStore;
+    use crate::MerkleDbHash;
+    use crate::Node;
+    use crate::NodeStore;
+    use crate::Path;
 
+    #[hash_mode]
     #[test]
-    fn test_maybe_persisted_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_committed(mem_store);
+    fn test_maybe_persisted_node<H: HashMode>() -> Result<(), FileIoError> {
+        let mem_store = MemStore::new(Vec::new()).into();
+        let store: NodeStore<Committed, MemStore, H> =
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![0].into(),
@@ -286,10 +315,12 @@ mod test {
         assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_committed(mem_store);
+    fn test_clone_shares_underlying_shared_node<H: HashMode>() -> Result<(), FileIoError> {
+        let mem_store = MemStore::new(Vec::new()).into();
+        let store: NodeStore<Committed, MemStore, H> =
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![42].into(),

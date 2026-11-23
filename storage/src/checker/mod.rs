@@ -2,25 +2,36 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
-pub(crate) use range_set::LinearAddressRangeSet;
-
-use crate::logger::warn;
-use crate::nodestore::alloc::FreeAreaWithMetadata;
-use crate::nodestore::primitives::{AreaIndex, area_size_iter};
-use crate::{
-    CheckerError, Committed, FileIoError, HashType, HashedNodeReader, IntoHashType, LinearAddress,
-    Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
-};
-
-#[cfg(not(feature = "ethhash"))]
-use crate::hashednode::hash_node;
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
 use indicatif::ProgressBar;
+pub(crate) use range_set::LinearAddressRangeSet;
+
+use crate::CheckerError;
+use crate::Committed;
+use crate::FileIoError;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashedNodeReader;
+use crate::LinearAddress;
+use crate::Mutable;
+use crate::Node;
+use crate::NodeReader;
+use crate::NodeStore;
+use crate::Path;
+use crate::Propose;
+use crate::ReadableStorage;
+use crate::RootReader;
+use crate::StoredAreaParent;
+use crate::TrieNodeParent;
+use crate::WritableStorage;
+use crate::logger::warn;
+use crate::nodestore::NodeStoreHeader;
+use crate::nodestore::alloc::FreeAreaWithMetadata;
+use crate::nodestore::primitives::AreaIndex;
+use crate::nodestore::primitives::area_size_iter;
 
 const OS_PAGE_SIZE: u64 = 4096;
 
@@ -36,17 +47,6 @@ fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
     let pages_read = end_page.saturating_sub(start_page).saturating_add(1); // Include the first page
     let min_pages = bytes.saturating_add(OS_PAGE_SIZE - 1) / OS_PAGE_SIZE; // Round up to the nearest page
     Some(pages_read.saturating_sub(min_pages))
-}
-
-#[cfg(feature = "ethhash")]
-fn is_valid_key(key: &Path) -> bool {
-    const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
-    VALID_ETH_KEY_SIZES.contains(&key.0.len())
-}
-
-#[cfg(not(feature = "ethhash"))]
-fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
 }
 
 #[expect(clippy::result_large_err)]
@@ -161,14 +161,18 @@ struct SubTrieMetadata {
     parent: TrieNodeParent,
     depth: usize,
     path_prefix: Path,
-    #[cfg(feature = "ethhash")]
+    /// Whether this subtrie's root has sibling children under its parent.
+    /// Only meaningful under the Ethereum scheme (it gates the single
+    /// storage-child storage-trie-root fold in
+    /// [`NodeStore::compute_node_ethhash`]);
+    /// always present so the checker stays scheme-agnostic.
     has_peers: bool,
 }
 
 /// [`NodeStore`] checker
-impl<T, S: ReadableStorage> NodeStore<T, S>
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S>: HashedNodeReader,
+    NodeStore<T, S, H>: HashedNodeReader,
 {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
@@ -199,12 +203,12 @@ where
         }
         let trie_stats = self
             .root_as_maybe_persisted_node()
-            .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
+            .zip(self.root_hash())
             .and_then(|(root, root_hash)| {
                 if let Some(root_address) = root.as_linear_address() {
                     let (trie_stats, trie_errors) = self.visit_trie(
                         root_address,
-                        root_hash.into_hash_type(),
+                        root_hash.into(),
                         &mut visited,
                         opt.progress_bar.as_ref(),
                         opt.hash_check,
@@ -260,7 +264,6 @@ where
             parent: TrieNodeParent::Root,
             depth: 0,
             path_prefix: Path::new(),
-            #[cfg(feature = "ethhash")]
             has_peers: false,
         };
         let mut trie_stats = TrieStats::default();
@@ -287,7 +290,6 @@ where
             parent,
             depth,
             path_prefix,
-            #[cfg(feature = "ethhash")]
             has_peers,
         } = subtrie;
 
@@ -325,7 +327,7 @@ where
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
-        if node.value().is_some() && !is_valid_key(&current_path_prefix) {
+        if node.value().is_some() && !H::is_valid_key(&current_path_prefix) {
             return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
                 address: subtrie_root_address,
@@ -335,10 +337,7 @@ where
 
         // compute the hash of the node and check it against the stored hash
         if hash_check {
-            #[cfg(feature = "ethhash")]
             let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
-            #[cfg(not(feature = "ethhash"))]
-            let hash = hash_node(&node, &path_prefix);
             if hash != subtrie_root_hash {
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
@@ -435,16 +434,17 @@ where
                         parent,
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
-                        #[cfg(feature = "ethhash")]
                         has_peers: num_children != 1,
                     };
-                    if let Err(e) = self.visit_trie_helper(
-                        child_subtrie,
-                        visited,
-                        trie_stats,
-                        progress_bar,
-                        hash_check,
-                    ) {
+                    if let Err(e) = crate::stack::ensure_stack(|| {
+                        self.visit_trie_helper(
+                            child_subtrie,
+                            visited,
+                            trie_stats,
+                            progress_bar,
+                            hash_check,
+                        )
+                    }) {
                         errors.extend(e);
                     }
                 }
@@ -576,7 +576,7 @@ pub struct FixReport {
     pub db_stats: DBStats,
 }
 
-impl<S: WritableStorage> NodeStore<Committed, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
     /// Given a check report, fixes any errors found.
     /// Returns a report of the fix operation.
     ///
@@ -588,13 +588,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         header: &mut NodeStoreHeader,
         check_report: CheckerReport,
     ) -> Result<FixReport, FileIoError> {
-        let mut proposal = NodeStore::<Mutable<Propose>, S>::new(self)?;
+        let mut proposal = NodeStore::<Mutable<Propose>, S, H>::new(self)?;
 
         Ok(proposal.fix(header, check_report))
     }
 }
 
-impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
     fn fix(&mut self, header: &mut NodeStoreHeader, check_report: CheckerReport) -> FixReport {
         let mut fixed = Vec::new();
         let mut unfixable = Vec::new();
@@ -618,7 +618,7 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                     if let CheckerError::AreaLeaks(ranges) = &error {
                         {
                             let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
-                            // TODO: add _leaked_areas to the free list
+                            // TODO(#2048): add _leaked_areas to the free list
                         }
                         unfixable.push((error, None));
                     } else {
@@ -636,9 +636,9 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
     }
 }
 
-impl<T, S: WritableStorage> NodeStore<T, S>
+impl<T, S: WritableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S>: NodeReader,
+    NodeStore<T, S, H>: NodeReader,
 {
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
     fn split_all_leaked_ranges<'a>(
@@ -722,7 +722,7 @@ where
         }
 
         // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
-        debug_assert!(current_addr == *leaked_range.end);
+        debug_assert_eq!(current_addr, *leaked_range.end);
         leaked
     }
 }
@@ -740,24 +740,35 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
+    use std::sync::Arc;
 
+    use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::BranchNode;
+    use crate::Child;
+    use crate::Children;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::FreeListParent;
+    use crate::HashMode;
+    use crate::ImmutableProposal;
+    use crate::LeafNode;
+    use crate::MerkleDbHash;
+    use crate::NodeStore;
+    use crate::Path;
+    use crate::PathComponent;
+    use crate::area_index;
+    use crate::hash_node;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::FreeLists;
-    use crate::nodestore::alloc::test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
-    };
+    use crate::nodestore::alloc::test_utils::test_write_free_area;
+    use crate::nodestore::alloc::test_utils::test_write_header;
+    use crate::nodestore::alloc::test_utils::test_write_new_node;
+    use crate::nodestore::alloc::test_utils::test_write_zeroed_area;
     use crate::nodestore::primitives::area_size_iter;
-    use crate::{
-        BranchNode, Child, Children, FreeListParent, ImmutableProposal, LeafNode, NodeStore, Path,
-        PathComponent, area_index, hash_node,
-    };
-    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestTrie {
@@ -769,7 +780,6 @@ mod test {
     }
 
     /// Generate a test trie with the following structure:
-    ///
     #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// graph TD
@@ -781,7 +791,7 @@ mod test {
     ///     Branch -->|"nibble 1"| Leaf
     /// ```
     #[expect(clippy::arithmetic_side_effects)]
-    fn gen_test_trie(nodestore: &NodeStore<Committed, MemStore>) -> TestTrie {
+    fn gen_test_trie<H: HashMode>(nodestore: &NodeStore<Committed, MemStore, H>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut total_branch_bytes_written = 0;
         let mut total_leaf_bytes_written = 0;
@@ -794,7 +804,7 @@ mod test {
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
+        let leaf_hash = hash_node::<H>(&leaf, &Path::from([2, 0, 3, 1]));
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
@@ -810,7 +820,7 @@ mod test {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node(&branch, &Path::from([2, 0]));
+        let branch_hash = hash_node::<H>(&branch, &Path::from([2, 0]));
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
@@ -827,7 +837,7 @@ mod test {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_hash = hash_node(&root, &Path::new());
+        let root_hash = hash_node::<H>(&root, &Path::new());
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
@@ -885,7 +895,9 @@ mod test {
     //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes      ^ 1 byte
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned                ^ missaligned
     #[expect(clippy::arithmetic_side_effects)]
-    fn gen_test_freelist_with_errors(nodestore: &NodeStore<Committed, MemStore>) -> TestFreelist {
+    fn gen_test_freelist_with_errors<H: HashMode>(
+        nodestore: &NodeStore<Committed, MemStore, H>,
+    ) -> TestFreelist {
         const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
         const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
         const AREA_INDEX3: AreaIndex = area_index!(3); // 96
@@ -915,7 +927,7 @@ mod test {
         next_free_block1 = Some(free_list1_area1);
         high_watermark += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         let area_size2 = AREA_INDEX2.size();
@@ -932,7 +944,7 @@ mod test {
         high_watermark += area_size2;
         let expected_high_watermark = high_watermark;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // third free list
         high_watermark += 1; // + 1 to create gap
@@ -943,12 +955,12 @@ mod test {
         next_free_block3 = Some(free_list3_area1);
         high_watermark += area_size3;
 
-        free_lists[AREA_INDEX3.as_usize()] = next_free_block3;
+        free_lists[AREA_INDEX3] = next_free_block3;
 
         // write header
         let header = test_write_header(nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = header.free_lists()[AREA_INDEX1.as_usize()].unwrap();
+        let expected_start_addr = header.free_lists()[AREA_INDEX1].unwrap();
         let expected_end_addr = LinearAddress::new(expected_high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![
@@ -987,12 +999,14 @@ mod test {
 
     use std::collections::HashMap;
 
+    #[hash_mode]
     #[test]
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
-    fn checker_traverse_correct_trie() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn checker_traverse_correct_trie<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let test_trie = gen_test_trie(&nodestore);
         // let (_, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
@@ -1012,11 +1026,13 @@ mod test {
         assert_eq!(errors, vec![]);
     }
 
+    #[hash_mode]
     #[test]
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
-    fn checker_traverse_trie_with_wrong_hash() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn checker_traverse_trie_with_wrong_hash<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut test_trie = gen_test_trie(&nodestore);
         let root_addr = test_trie.root_address;
@@ -1042,14 +1058,11 @@ mod test {
         test_write_new_node(&nodestore, branch_node, branch_addr.get());
 
         // Compute the current branch hash
-        #[cfg(feature = "ethhash")]
-        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
+        let computed_hash = NodeStore::<Committed, MemStore, H>::compute_node_ethhash(
             branch_node,
             &Path::from([2, 0]),
             false,
         );
-        #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
 
         // Get parent stored hash
         let (root_node, _) = test_trie
@@ -1085,12 +1098,18 @@ mod test {
         assert_eq!(errors, vec![expected_error]);
     }
 
+    #[hash_mode]
     #[test]
-    fn traverse_correct_freelist() {
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "the test constructs bounded in-memory area offsets"
+    )]
+    fn traverse_correct_freelist<H: HashMode>() {
         let rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -1110,7 +1129,7 @@ mod test {
                 }
                 high_watermark += area_size;
             }
-            freelist[area_index.as_usize()] = next_free_block;
+            freelist[area_index] = next_free_block;
             if num_free_areas > 0 {
                 free_area_counts.insert(area_size, num_free_areas);
             }
@@ -1133,10 +1152,12 @@ mod test {
         assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
     }
 
+    #[hash_mode]
     #[test]
-    fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn traverse_freelist_should_skip_offspring_of_incorrect_areas<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
             free_ranges,
@@ -1154,10 +1175,12 @@ mod test {
         assert_eq!(free_list_errors, errors);
     }
 
+    #[hash_mode]
     #[test]
-    fn fix_freelist_with_overlap() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn fix_freelist_with_overlap<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
             free_ranges: _,
@@ -1168,7 +1191,7 @@ mod test {
         let expected_error_num = errors.len();
 
         // fix the freelist
-        let mut proposal = NodeStore::<Mutable<Propose>, _>::new(&nodestore).unwrap();
+        let mut proposal = NodeStore::<Mutable<Propose>, _, H>::new(&nodestore).unwrap();
         let fix_report = proposal.fix(
             &mut header,
             CheckerReport {
@@ -1184,23 +1207,29 @@ mod test {
         assert_eq!(fix_report.unfixable.len(), 0);
 
         let immutable_proposal =
-            NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal).unwrap();
+            NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(proposal).unwrap();
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (_, free_list_errors) =
             immutable_proposal.visit_freelist(header.free_lists(), &mut visited, None);
         assert_eq!(free_list_errors, vec![]);
     }
 
+    #[hash_mode]
     #[test]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "the test constructs bounded in-memory area offsets"
+    )]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    fn split_correct_range_into_leaked_areas() {
+    fn split_correct_range_into_leaked_areas<H: HashMode>() {
         use rand::seq::IteratorRandom;
 
         let mut rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let num_areas = 10;
 
@@ -1251,13 +1280,15 @@ mod test {
         assert_eq!(leaked_areas, expected_free_areas);
     }
 
+    #[hash_mode]
     #[test]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
     #[expect(clippy::arithmetic_side_effects)]
-    fn split_range_of_zeros_into_leaked_areas() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn split_range_of_zeros_into_leaked_areas<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let expected_leaked_area_indices = vec![
             area_index!(8),
@@ -1303,12 +1334,14 @@ mod test {
         assert_eq!(leaked_area_size_indices, expected_leaked_area_indices);
     }
 
+    #[hash_mode]
     #[test]
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(clippy::arithmetic_side_effects)]
-    fn split_range_into_leaked_areas_test() {
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+    fn split_range_into_leaked_areas_test<H: HashMode>() {
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;

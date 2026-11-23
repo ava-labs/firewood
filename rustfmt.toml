@@ -1,0 +1,8 @@
+# https://rust-lang.github.io/rustfmt/
+
+group_imports = "StdExternalCrate"
+imports_granularity = "Item"
+normalize_comments = true
+normalize_doc_attributes = true
+format_macro_matchers = true
+use_field_init_shorthand = true

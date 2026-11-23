@@ -12,26 +12,32 @@
 )]
 #![doc = include_str!("../docs/synthetic-workloads.md")]
 
-use clap::{Parser, Subcommand, ValueEnum};
-use fastrace_opentelemetry::OpenTelemetryReporter;
-use firewood::logger::trace;
-use firewood_storage::NodeHashAlgorithm;
-use log::LevelFilter;
-use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
-
+use clap::Parser;
+use clap::Subcommand;
+use clap::ValueEnum;
 use fastrace::collector::Config;
-
+use fastrace_opentelemetry::OpenTelemetryReporter;
+use firewood::api::DynDb;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::logger::trace;
+use firewood::manager::CacheReadStrategy;
+use firewood::manager::RevisionManagerConfig;
+use firewood::open;
+use firewood_storage::FREE_LIST_CACHE_ENTRY_SIZE;
+use log::LevelFilter;
 use opentelemetry::InstrumentationScope;
-use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
+use sha2::Digest;
+use sha2::Sha256;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -44,6 +50,14 @@ struct Args {
 
 #[derive(clap::Args, Debug)]
 struct GlobalOpts {
+    #[arg(
+        long,
+        value_enum,
+        required = true,
+        help = "The hash algorithm to use for the database"
+    )]
+    hash_mode: HashModeArg,
+
     #[arg(
         short = 'e',
         long,
@@ -112,6 +126,23 @@ struct GlobalOpts {
     )]
     cache_read_strategy: ArgCacheReadStrategy,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+enum HashModeArg {
+    #[value(name = "merkle-db")]
+    MerkleDB,
+    #[value(name = "ethereum")]
+    Ethereum,
+}
+
+impl From<HashModeArg> for firewood_storage::NodeHashAlgorithm {
+    fn from(hash_mode: HashModeArg) -> Self {
+        match hash_mode {
+            HashModeArg::MerkleDB => Self::MerkleDB,
+            HashModeArg::Ethereum => Self::Ethereum,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, ValueEnum, Clone)]
 pub enum ArgCacheReadStrategy {
     WritesOnly,
@@ -158,7 +189,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &dyn DynDb, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -229,38 +260,50 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_memory_limit(args.global_opts.cache_memory_limit)
-        .free_list_cache_size(
-            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
+        // Budget enough free-list cache for four batches' worth of freed nodes,
+        // expressed in the kibibytes those entries occupy.
+        .freelist_memory_limit_kb(
+            NonZeroUsize::new(
+                (4 * args.global_opts.batch_size as usize * FREE_LIST_CACHE_ENTRY_SIZE)
+                    .div_ceil(1024),
+            )
+            .expect("batch size > 0"),
         )
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
-        .truncate(matches!(args.test_name, TestName::Create))
+        .truncate(matches!(&args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = open(
+        args.global_opts.dbname.clone(),
+        args.global_opts.hash_mode.into(),
+        cfg,
+    )
+    .expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {
             let runner = create::Create;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::TenKRandom => {
             let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Zipf(_) => {
             let runner = zipf::Zipf;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Single => {
             let runner = single::Single;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
     }
+    // Dropping the database without closing can lose committed data.
+    db.close()?;
 
     #[cfg(feature = "prometheus")]
     if args.global_opts.stats_dump {
@@ -276,10 +319,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn spawn_prometheus_listener(
     port: u16,
 ) -> Result<metrics_exporter_prometheus::PrometheusHandle, Box<dyn Error>> {
+    use std::net::Ipv6Addr;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
     use metrics_exporter_prometheus::PrometheusBuilder;
     use metrics_util::MetricKindMask;
-    use std::net::{Ipv6Addr, SocketAddr};
-    use std::time::Duration;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

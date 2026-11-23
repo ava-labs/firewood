@@ -5,55 +5,79 @@ on:
   release:
     types: [published]
 
+env:
+  # Build on stable, not the nightly rust-toolchain.toml pin; setup-rust's
+  # default stable toolchain alone does not do that. See AGENTS.md,
+  # "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
+
 jobs:
   publish-firewood-crate:
     name: firewood-lib
     runs-on: ubuntu-latest
-    # Publishing requires CARGO_TOKEN which only the canonical repo has.
+    # crates.io trusted publishing is configured for the canonical repo only.
     if: github.repository == 'ava-labs/firewood' && startsWith(github.event.release.tag_name, 'v')
+    permissions:
+      contents: read
+      # Required to request the OIDC token that crates.io exchanges for a
+      # short-lived publish token.
+      id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
-      ## NOTE: keep these packages sorted in reverse topological order!
-      ## cargo tree --workspace -e all | grep firewood
-      - name: publish firewood-macros crate
-        continue-on-error: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - name: publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        # The token expires after 30 minutes, so a run that outlasts it fails
+        # partway; re-running resumes (see below).
+        #
+        # Each crate follows every crate it depends on through normal or build
+        # dependencies; list them with
+        # `cargo metadata --format-version 1 --no-deps`. A dev-dependency on a
+        # crate published later must omit `version` so that `cargo publish`
+        # strips it.
+        #
+        # firewood-triehash is unmaintained and must not be published again.
+        #
+        # Versions already on crates.io are skipped, so re-running after a
+        # partial failure resumes where the previous run stopped.
         run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-macros
-      # TODO(demosdemon): detect when version is bumped and only publish then
-      # - name: publish firewood-triehash crate
-      #   continue-on-error: false
-      #   run: |
-      #     cargo login ${{ secrets.CARGO_TOKEN }}
-      #     cargo publish -p firewood-triehash
-      - name: publish firewood-storage crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-storage
-      - name: publish firewood crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood
-      - name: publish firewood-replay crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-replay
-      - name: publish firewood-ffi crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-ffi
-      - name: publish firewood-fwdctl crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-fwdctl
-      - name: publish firewood-benchmark crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-benchmark
+          set -euo pipefail
+
+          crates=(
+            firewood-metrics
+            firewood-macros
+            firewood-storage
+            firewood
+            firewood-replay
+            firewood-ffi
+            firewood-fwdctl
+            firewood-benchmark
+          )
+
+          metadata="$(cargo metadata --format-version 1 --no-deps)"
+
+          # Paths follow the crates.io sparse index layout for names of four or
+          # more characters.
+          published() {
+            local name="$1" version="$2"
+            curl --proto '=https' --tlsv1.2 --silent --show-error --fail --retry 5 \
+              "https://index.crates.io/${name:0:2}/${name:2:2}/${name}" |
+              jq --exit-status --arg v "$version" 'select(.vers == $v)' >/dev/null
+          }
+
+          for crate in "${crates[@]}"; do
+            version="$(jq --raw-output --arg n "$crate" \
+              '.packages[] | select(.name == $n) | .version' <<<"$metadata")"
+            if published "$crate" "$version"; then
+              echo "::notice::skip $crate $version: already on crates.io"
+              continue
+            fi
+            # cargo publish waits until the new version is in the index, so the
+            # next crate resolves it.
+            cargo publish --package "$crate"
+          done

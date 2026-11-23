@@ -3,7 +3,8 @@
 
 use smallvec::SmallVec;
 
-use super::{PathComponent, TriePath};
+use super::PathComponent;
+use super::TriePath;
 
 /// A trie path that can be (cheaply) split into two sub-paths.
 ///
@@ -23,6 +24,18 @@ pub trait SplitPath: TriePath + Default + Copy {
     ///
     /// Returns [`None`] if the path is empty.
     fn split_first(self) -> Option<(PathComponent, Self)>;
+
+    /// Splits the last path component off of this path, returning it along with
+    /// the remaining path.
+    ///
+    /// Returns [`None`] if the path is empty.
+    fn split_last(self) -> Option<(PathComponent, Self)> {
+        let prefix_len = self.len().checked_sub(1)?;
+        let (prefix, last) = self.split_at(prefix_len);
+        // `last` has exactly one component because we split at `len - 1`.
+        let (component, _) = last.split_first()?;
+        Some((component, prefix))
+    }
 
     /// Computes the longest common prefix of this path and another path, along
     /// with their respective suffixes.

@@ -6,7 +6,15 @@
 // static shortcut
 
 #[cfg(feature = "logger")]
-pub use log::{debug, error, info, trace, warn};
+pub use firewood_metrics::firewood_debug as debug;
+#[cfg(feature = "logger")]
+pub use firewood_metrics::firewood_error as error;
+#[cfg(feature = "logger")]
+pub use firewood_metrics::firewood_info as info;
+#[cfg(feature = "logger")]
+pub use firewood_metrics::firewood_trace as trace;
+#[cfg(feature = "logger")]
+pub use firewood_metrics::firewood_warn as warn;
 
 /// Returns true if the trace log level is enabled
 #[cfg(feature = "logger")]
@@ -16,7 +24,17 @@ pub fn trace_enabled() -> bool {
 }
 
 #[cfg(not(feature = "logger"))]
-pub use noop_logger::{debug, error, info, trace, trace_enabled, warn};
+pub use noop_logger::debug;
+#[cfg(not(feature = "logger"))]
+pub use noop_logger::error;
+#[cfg(not(feature = "logger"))]
+pub use noop_logger::info;
+#[cfg(not(feature = "logger"))]
+pub use noop_logger::trace;
+#[cfg(not(feature = "logger"))]
+pub use noop_logger::trace_enabled;
+#[cfg(not(feature = "logger"))]
+pub use noop_logger::warn;
 
 #[cfg(not(feature = "logger"))]
 mod noop_logger {

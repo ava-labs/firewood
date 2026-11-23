@@ -33,6 +33,7 @@
 //! - `reader`: Proof reading and deserialization utilities.
 //! - `ser`: Proof serialization implementation (internal).
 //! - `de`: Proof deserialization implementation (internal).
+//! - `frame`: zstd compression framing for serialized proof bodies (internal).
 //! - `childmask` (in `merkle`): Compact bitmap for tracking present children.
 //! - `magic`: Magic constants for proof format identification (internal).
 //!
@@ -41,7 +42,9 @@
 //! Proofs are serialized in a compact binary format that includes:
 //!
 //! 1. A 32-byte header identifying the proof type, version, hash mode, and branching factor
-//! 2. A sequence of proof nodes, each containing:
+//! 2. A single zstd frame compressing the canonical body (see `frame` for the
+//!    decode bounds and canonicality rules). The canonical body is a sequence
+//!    of proof nodes, each containing:
 //!    - The node's key path (variable length)
 //!    - The node's value or value hash (if present)
 //!    - A bitmap indicating which children are present
@@ -49,6 +52,9 @@
 //!
 //! Change proofs additionally serialize their `batch_ops` as a sequence of tagged
 //! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
+//!
+//! Readers reject keys longer than 1024 bytes and proof-node keys longer than
+//! 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`].
 //!
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
@@ -131,7 +137,7 @@
 //!   ^        ^       ^          ^ ^           ^       ^         ^
 //!   |        |       |          | |           |       |         |
 //!  0x00      |  first_proof_key | |    last_proof_key |       0xff..
-//!            |       ^          | |           ^       |     
+//!            |       ^          | |           ^       |
 //!         requested_start_key   | |        requested_end_key
 //!       (2 possible locations)  | |        (2 possible locations)
 //!                               | |
@@ -150,8 +156,8 @@
 //! keys), or absent edge proofs (when the range covers the entire
 //! keyspace).
 //!
-//! Note: `requested_start_key` and `right_edge_key` (which equals
-//! `requested_end_key` unless the proof was truncated) are used during
+//! Note: `requested_start_key` and `right_edge_key` (the key the end proof is
+//! anchored at — see `compute_right_edge_key`) are used during
 //! root hash verification (Phase 3) to distinguish in-range from
 //! out-of-range nodes. This determines which proof node values to
 //! adopt during branch expansion and which children to check during
@@ -208,11 +214,12 @@
 //! so the hash computation reflects `end_root`.
 //!
 //! For exclusion proofs, the terminal proof node may overshoot the
-//! boundary key to the nearest existing key. Such nodes are in-range
-//! (>= `requested_start_key` for start proofs, <= `requested_end_key`
-//! for end proofs) and
-//! value conflicts there are real errors — the proposal already has
-//! the correct value from the batch_ops.
+//! boundary key to the nearest existing key. Such a node is in-range only
+//! when it lies within both bounds, `[requested_start_key,
+//! right_edge_key]`, and a value conflict there is a real error — the
+//! proposal already has the correct value from the batch_ops. Testing one
+//! bound alone would judge a terminal beyond the far bound as in-range,
+//! and report its legitimately differing value as an error.
 //!
 //! ### Step 3 — Branch collapsing
 //!
@@ -240,6 +247,14 @@
 //! `start_root` structure that doesn't exist in `end_root` and will be
 //! accounted for by the proof's boundary hashes.
 //!
+//! **Values at intermediate nodes** follow the same range rule. A node whose
+//! own key is out of range has its value cleared, so Step 4 can supply the
+//! digest the proof carries for `end_root`. A node whose key is in range keeps
+//! its value, so it is validated against `batch_ops` — dropping it would let a
+//! forged or omitted in-range op whose key is a prefix of the boundary slip
+//! through. Because a node that keeps its value must survive, it is never
+//! flattened into its only child.
+//!
 //! `collapse_root_to_path` applies the same logic to the root itself,
 //! handling cases where out-of-range deletions caused `end_root`'s root
 //! to path-compress (e.g., root partial_path changes from `[]` to
@@ -250,6 +265,22 @@
 //! `compute_outside_children` determines which children at each
 //! boundary proof node fall outside the proven range (left of
 //! `requested_start_key` or right of `right_edge_key`).
+//!
+//! A boundary terminal's on-path child — the child the boundary key descends
+//! into — is resolved against the **proving trie**: it is marked outside only
+//! when the proposal holds no in-range key under it. An omitted in-range
+//! delete or a forged op leaves its key in the proposal, so that child stays
+//! in range and is recomputed rather than taken from the proof, and the
+//! mismatch is caught. An omitted in-range put leaves the proposal with no
+//! child there at all, which is likewise kept in range and recomputed. An
+//! unbounded right edge is treated as +∞ here, not as an empty (minimum) key.
+//!
+//! Marking that child outside substitutes the proof's child hash for it, which
+//! is safe only when the proof has no hash at that nibble — otherwise it could
+//! supply one that hides in-range state. Structural verification (phase 1)
+//! already guarantees this for any valid exclusion proof
+//! (`ExclusionProofMissingChild`), and [`verify_change_proof_root_hash`] checks
+//! it locally so the guarantee does not depend on phase 1 having run.
 //!
 //! `compute_root_hash_with_proofs` recursively walks the **proving trie**:
 //!
@@ -287,29 +318,49 @@
 
 pub(crate) mod change;
 pub(super) mod de;
-pub mod eth;
+pub(crate) mod eth;
+pub(crate) mod frame;
 pub(crate) mod header;
 pub(crate) mod range;
 pub(crate) mod reader;
 pub(super) mod ser;
 #[cfg(test)]
+mod snapshot_tests;
+#[cfg(test)]
 mod tests;
 pub(crate) mod types;
 
-pub use self::change::{
-    ChangeProof, ChangeProofVerificationContext, find_next_key_after_change_proof,
-    verify_change_proof_structure,
-};
-
+pub use self::change::ChangeProof;
+pub use self::change::ChangeProofVerificationContext;
+pub use self::change::find_next_key_after_change_proof;
+pub use self::change::verify_change_proof_structure;
+pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
-pub use self::range::{
-    KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,
-    verify_range_proof_structure,
-};
+pub use self::range::KeyRange;
+pub use self::range::RangeProof;
+pub use self::range::RangeProofVerificationContext;
+pub use self::range::find_next_key_after_range_proof;
+pub use self::range::verify_range_proof_structure;
 pub use self::reader::ReadError;
-pub use self::types::{
-    EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType,
-};
+pub use self::types::EmptyProofCollection;
+pub use self::types::Proof;
+pub use self::types::ProofCollection;
+pub use self::types::ProofEdge;
+pub use self::types::ProofError;
+pub use self::types::ProofNode;
+pub use self::types::ProofType;
+
+/// Returns the smallest byte string strictly greater than `key`: `key` with a
+/// `0x00` byte appended, since nothing sorts between the two. Total — every byte
+/// string has one, including the empty key.
+///
+/// [`find_next_key_after_range_proof`] and [`find_next_key_after_change_proof`]
+/// use it to resume strictly above the last key a proof covered. Both request
+/// bounds are inclusive, so resuming at that key would cover it again and never
+/// advance.
+pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
+    [key, &[0]].concat().into_boxed_slice()
+}
 
 pub(super) mod magic {
     //! Magic constants for proof format identification.
@@ -325,18 +376,16 @@ pub(super) mod magic {
     pub const PROOF_VERSION: u8 = 0;
 
     /// Hash mode identifier for SHA-256 hashing
-    #[cfg(not(feature = "ethhash"))]
-    pub const HASH_MODE: u8 = 0;
+    pub const MERKLEDB_HASH_MODE: u8 = 0;
 
     /// Hash mode identifier for Keccak-256 hashing (Ethereum-compatible)
-    #[cfg(feature = "ethhash")]
-    pub const HASH_MODE: u8 = 1;
+    pub const ETHEREUM_HASH_MODE: u8 = 1;
 
     /// Returns the human-readable name for a hash mode identifier.
     pub const fn hash_mode_name(v: u8) -> &'static str {
         match v {
-            0 => "sha256",
-            1 => "keccak256",
+            MERKLEDB_HASH_MODE => "sha256",
+            ETHEREUM_HASH_MODE => "keccak256",
             _ => "unknown",
         }
     }

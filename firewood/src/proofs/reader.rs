@@ -7,28 +7,87 @@
 //! including the `ProofReader` type for sequential reading and traits for
 //! deserializing individual proof components.
 
-use super::header::{Header, InvalidHeader};
+use std::num::NonZeroUsize;
 
+use firewood_storage::NodeHashAlgorithm;
+
+use super::header::Header;
+use super::header::InvalidHeader;
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;
 }
 
 pub(super) trait Version0: Sized {
+    /// The minimum number of bytes required to deserialize a single instance of this type.
+    const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError>;
 }
 
-pub(super) struct ProofReader<'a> {
+/// Marker for a reader that has not yet learned the proof's hash algorithm
+/// from the header. It exists only so that body reads are
+/// inexpressible during the header phase.
+pub(super) struct NoAlgorithm;
+
+pub(super) struct ProofReader<'a, M = NodeHashAlgorithm> {
     data: &'a [u8],
     offset: usize,
+    /// The hash algorithm the proof being read was encoded with, resolved from
+    /// the self-describing `hash_mode` header byte. During the header phase
+    /// this is [`NoAlgorithm`]: no placeholder mode ever exists.
+    mode: M,
+}
+
+impl<'a> ProofReader<'a, NoAlgorithm> {
+    /// Creates a reader for parsing the fixed-size header, before the proof's
+    /// own hash mode is known. Body items cannot be read until the resolved
+    /// algorithm is supplied via [`ProofReader::into_body`].
+    #[must_use]
+    pub const fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            offset: 0,
+            mode: NoAlgorithm,
+        }
+    }
+
+    /// Parses the fixed-size proof header — the only item that can be read
+    /// before the proof's hash algorithm is known.
+    pub fn read_header(&mut self) -> Result<Header, ReadError> {
+        self.read_chunk::<{ size_of::<Header>() }>()
+            .map_err(|err| err.set_item("header"))
+            .copied()
+            .map(bytemuck::cast)
+    }
+
+    /// Transitions to the body phase with the hash algorithm resolved from the
+    /// validated header, so body reads dispatch on the proof's own mode.
+    /// Consuming `self` keeps the phases exclusive: the only way to read body
+    /// items is to supply the algorithm first.
+    #[must_use]
+    pub const fn into_body(self, algorithm: NodeHashAlgorithm) -> ProofReader<'a> {
+        ProofReader {
+            data: self.data,
+            offset: self.offset,
+            mode: algorithm,
+        }
+    }
 }
 
 impl<'a> ProofReader<'a> {
+    /// The hash algorithm the proof being read was encoded with.
     #[must_use]
-    pub const fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.mode
     }
 
+    pub(super) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
+        T::read_item(self)
+    }
+}
+
+impl<'a, M> ProofReader<'a, M> {
     pub fn read_chunk<const N: usize>(&mut self) -> Result<&'a [u8; N], ReadError> {
         if let Some((chunk, _)) = self.remainder().split_first_chunk::<N>() {
             #[expect(clippy::arithmetic_side_effects)]
@@ -56,10 +115,6 @@ impl<'a> ProofReader<'a> {
         } else {
             Err(self.incomplete_item("byte slice", n))
         }
-    }
-
-    pub(super) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
-        T::read_item(self)
     }
 
     pub fn remainder(&self) -> &'a [u8] {

@@ -1,0 +1,70 @@
+name: ffi-latest-go
+
+# Go patch releases can add linker-input checks (go1.26.11 started rejecting
+# LTO sections) before the go.mod pin moves. Test the shipped static libs
+# against the newest patch of each supported Go minor out of band, so a new Go
+# release cannot block unrelated PRs.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ffi-latest-go.yaml
+      - ffi/scripts/strip-lto-sections.sh
+
+env:
+  CARGO_TERM_COLOR: always
+  # See AGENTS.md, "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: $/.github/actions/setup-rust
+        with:
+          components: llvm-tools
+          cache-key: ffi-latest-go
+      # Mirror attach-static-libs: build and strip the maxperf lib, then link
+      # it from ffi/libs/<target> in static-libs cgo mode.
+      - name: Build static lib
+        run: |
+          cargo fetch --locked
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          cargo build-static-ffi --target "$target"
+          lib="target/$target/maxperf/libfirewood_ffi.a"
+          ffi/scripts/strip-lto-sections.sh "$lib"
+          mkdir -p "ffi/libs/$target"
+          cp "$lib" "ffi/libs/$target/"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: "ffi/go.mod"
+          cache-dependency-path: "ffi/go.sum"
+      - name: Switch to static libs cgo mode
+        working-directory: ffi
+        run: FIREWOOD_LD_MODE=STATIC_LIBS go generate
+      - name: Test on newest Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache: false
+      - run: go test ./...
+        working-directory: ffi
+        env:
+          TEST_FIREWOOD_HASH_MODE: ethhash
+      - name: Test on newest Go 1.27
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+          cache: false
+      - run: go test ./...
+        working-directory: ffi
+        env:
+          TEST_FIREWOOD_HASH_MODE: ethhash

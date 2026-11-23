@@ -1,16 +1,20 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use clap::Args;
-use firewood::api::{self, Db as _};
-use firewood::db::{Db, DbConfig};
-use firewood::iter::MerkleKeyValueIter;
-use firewood::{Key, Value};
-use firewood_storage::FileIoError;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
+use std::io::Write;
 use std::path::PathBuf;
+
+use clap::Args;
+use firewood::Key;
+use firewood::Value;
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::FileIoError;
 
 use crate::DatabasePath;
 
@@ -142,11 +146,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         }
     }
 
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
-        .create_if_missing(false)
-        .truncate(false);
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let algorithm = opts.database.node_hash_algorithm()?;
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
+    let db = open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
     let latest_hash = db.root_hash();
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");
@@ -155,7 +157,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let latest_rev = db.revision(latest_hash)?;
 
     let Some(mut output_handler) =
-        create_output_handler(opts, &db).expect("Error creating output handler")
+        create_output_handler(opts, db.as_ref()).expect("Error creating output handler")
     else {
         // dot format is generated in the handler
         return db.close();
@@ -169,7 +171,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let stop_key = opts.stop_key.clone().or(opts.stop_key_hex.clone());
     let mut key_count: u32 = 0;
 
-    let mut iter = MerkleKeyValueIter::from_key(&latest_rev, start_key);
+    let mut iter = latest_rev.iter_option(Some(start_key.as_ref()))?;
 
     while let Some(item) = iter.next() {
         match item {
@@ -224,6 +226,10 @@ fn key_value_to_string(key: &[u8], value: &[u8], hex: bool) -> (String, String) 
         u8_to_string(value).to_string()
     };
     (key_str, value_str)
+}
+
+fn write_json_string<W: Write>(writer: &mut W, value: &str) -> Result<(), std::io::Error> {
+    write!(writer, "\"{}\"", json_escape::escape_str(value))
 }
 
 fn handle_next_key(next_key: KeyFromStream) {
@@ -283,7 +289,10 @@ impl OutputHandler for JsonOutputHandler {
             self.writer.write_all(b",\n")?;
         }
 
-        write!(self.writer, r#"  "{key_str}": "{value_str}""#)?;
+        write!(self.writer, "  ")?;
+        write_json_string(&mut self.writer, &key_str)?;
+        write!(self.writer, ": ")?;
+        write_json_string(&mut self.writer, &value_str)?;
         Ok(())
     }
 
@@ -311,7 +320,7 @@ impl OutputHandler for StdoutOutputHandler {
 
 fn create_output_handler(
     opts: &Options,
-    db: &Db,
+    db: &dyn DynDb,
 ) -> Result<Option<Box<dyn OutputHandler + Send + Sync>>, Box<dyn Error>> {
     let hex = opts.hex;
     let mut file_name = opts.output_file_name.clone();
@@ -346,7 +355,8 @@ fn create_output_handler(
             let file = File::create(file_name)?;
             let mut writer = BufWriter::new(file);
             // For dot format, we generate the output immediately since it doesn't use streaming
-            db.dump(&mut writer)?;
+            let dot = db.dump_to_string()?;
+            std::io::Write::write_all(&mut writer, dot.as_bytes())?;
             Ok(None)
         }
     }

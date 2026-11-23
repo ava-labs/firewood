@@ -64,10 +64,9 @@ fn write_all_with_sep(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    use test_case::test_case;
 
     use super::*;
-    use test_case::test_case;
 
     #[test_case(Some(0usize), "(4 hidden)"; "with limit 0")]
     #[test_case(Some(2usize), "apple, banana, ... (2 more hidden)"; "with limit 2")]
@@ -75,7 +74,7 @@ mod tests {
     fn test_write_iter(limit: Option<usize>, expected: &str) {
         let mut output = String::new();
         let items = ["apple", "banana", "cherry", "date"];
-        write_limited_with_sep(&mut output, &items, ", ", limit).unwrap();
+        write_limited_with_sep(&mut output, items, ", ", limit).unwrap();
         assert_eq!(output, expected);
     }
 }

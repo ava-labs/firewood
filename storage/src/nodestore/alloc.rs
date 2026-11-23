@@ -20,28 +20,83 @@
 //! - **`AreaType`** - 0xFF for free areas, otherwise node type data (1 byte)
 //! - **`NodeData`** - Serialized node content
 
-use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, index_name};
-use crate::linear::FileIoError;
-use crate::logger::trace;
-use crate::node::branch::{ReadSerializable, Serializable};
-use crate::nodestore::NodeStoreHeader;
-use firewood_metrics::{firewood_counter, firewood_gauge};
-use integer_encoding::VarIntReader;
-
-use std::io::{Error, ErrorKind, Read};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::io::Read;
 use std::iter::FusedIterator;
 use std::mem::size_of;
+use std::ops::Index;
+use std::ops::IndexMut;
 
-use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
+use bytemuck_derive::Pod;
+use bytemuck_derive::Zeroable;
+use firewood_metrics::firewood_counter;
+use integer_encoding::VarIntReader;
+
+use super::area_index_and_size;
+use super::primitives::AreaIndex;
+use super::primitives::LinearAddress;
+use super::primitives::index_name;
+use crate::FreeListParent;
+use crate::HashMode;
+use crate::MaybePersistedNode;
+use crate::ReadableStorage;
+use crate::WritableStorage;
+use crate::linear::FileIoError;
+use crate::logger::trace;
+use crate::node::branch::ReadSerializable;
+use crate::node::branch::Serializable;
+use crate::nodestore::NodeStoreHeader;
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
     const { (size_of::<VI>() * 8 + 7) / 7 }
 }
 
-/// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
-pub type FreeLists = [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES];
+/// Heads of the free lists for each area size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+#[repr(transparent)]
+pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
+
+impl FreeLists {
+    /// Creates a new [`FreeLists`] with all heads set to `None`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self([const { None }; AreaIndex::NUM_AREA_SIZES])
+    }
+
+    /// Returns a mutable reference to the free list head for `index`.
+    ///
+    /// This is infallible because [`AreaIndex`] is guaranteed to be in-bounds.
+    #[must_use]
+    pub const fn get_mut(&mut self, index: AreaIndex) -> &mut Option<LinearAddress> {
+        #![expect(clippy::indexing_slicing)]
+        &mut self.0[index.as_usize()]
+    }
+}
+
+impl Default for FreeLists {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Index<AreaIndex> for FreeLists {
+    type Output = Option<LinearAddress>;
+
+    fn index(&self, index: AreaIndex) -> &Self::Output {
+        // `AreaIndex` is bounds-checked by construction, so this cannot index
+        // outside the fixed free-list array.
+        #[expect(clippy::indexing_slicing)]
+        &self.0[index.as_usize()]
+    }
+}
+
+impl IndexMut<AreaIndex> for FreeLists {
+    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
+        self.get_mut(index)
+    }
+}
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -185,6 +240,65 @@ impl FreeArea {
     }
 }
 
+/// Discriminates the contents of a stored area based on its `AreaType` byte.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AreaKind {
+    /// The area is free (`AreaType` is 0xFF).
+    Free,
+    /// The area contains a serialized node (any other `AreaType` value).
+    Node,
+}
+
+/// Metadata about a stored area, read directly from its header bytes.
+pub(crate) struct StoredAreaInfo {
+    /// The kind of the area, as indicated by its `AreaType` byte.
+    pub(crate) kind: AreaKind,
+    /// The size class of the area.
+    pub(crate) index: AreaIndex,
+    /// The size of the area in bytes.
+    pub(crate) size: u64,
+}
+
+/// Reads the `AreaIndex` and `AreaType` bytes of the stored area at `address`,
+/// returning its [`StoredAreaInfo`]. Free areas are validated by parsing their
+/// next-free-block payload; node areas are only identified by their marker
+/// byte, not deserialized.
+///
+/// Note: legacy free areas written with the old 0x01 marker are reported as
+/// [`AreaKind::Node`] since that marker is ambiguous with a leaf node's first
+/// byte.
+///
+/// # Errors
+///
+/// Returns a [`FileIoError`] if the bytes cannot be read, the area index is
+/// invalid, or a free area's payload is malformed.
+pub(crate) fn read_stored_area_info<S: ReadableStorage>(
+    storage: &S,
+    address: LinearAddress,
+) -> Result<StoredAreaInfo, FileIoError> {
+    let addr = address.get();
+    let stream = storage.stream_from(addr)?;
+    read_stored_area_info_from_reader(stream)
+        .map_err(|e| storage.file_io_error(e, addr, Some("read_stored_area_info".to_owned())))
+}
+
+fn read_stored_area_info_from_reader(mut reader: impl Read) -> std::io::Result<StoredAreaInfo> {
+    let index = AreaIndex::try_from(reader.read_byte()?)?;
+    let kind = match reader.read_byte()? {
+        0xFF => {
+            // validate the free area's payload: the next free block address
+            let _: u64 = reader.read_varint()?;
+            AreaKind::Free
+        }
+        _ => AreaKind::Node,
+    };
+    Ok(StoredAreaInfo {
+        kind,
+        index,
+        size: index.size(),
+    })
+}
+
 // Re-export the NodeStore types we need
 use super::NodeStore;
 
@@ -231,11 +345,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         &mut self,
         index: AreaIndex,
     ) -> Result<Option<LinearAddress>, FileIoError> {
-        let free_stored_area_addr = self
-            .header
-            .free_lists_mut()
-            .get_mut(index.as_usize())
-            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
+        let free_stored_area_addr = self.header.free_lists_mut().get_mut(index);
         if let Some(address) = free_stored_area_addr {
             let address = *address;
             if let Some(free_head) = self.storage.free_list_cache(address) {
@@ -250,7 +360,6 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             }
 
             firewood_counter!(SPACE_REUSED, "index" => index_name(index)).increment(index.size());
-            firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(index)).decrement(1.0);
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -312,7 +421,6 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
-    #[expect(clippy::indexing_slicing)]
     pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
@@ -324,20 +432,19 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
             .increment(area_size_index.size());
-        firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
+        FreeArea::new(self.header.free_lists()[area_size_index])
             .as_bytes(area_size_index, &mut stored_area_bytes);
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
         self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index]);
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
+        self.header.free_lists_mut()[area_size_index] = Some(addr);
 
         Ok(())
     }
@@ -424,9 +531,8 @@ pub(crate) struct FreeAreaWithMetadata {
 
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
-    free_lists_iter: std::iter::Skip<
-        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
-    >,
+    free_lists: &'a FreeLists,
+    next_free_list_id: Option<AreaIndex>,
     current_free_list: Option<(AreaIndex, FreeListIterator<'a, S>)>,
 }
 
@@ -436,26 +542,36 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         free_lists: &'a FreeLists,
         start_area_index: AreaIndex,
     ) -> Self {
-        let mut free_lists_iter = free_lists
-            .iter()
-            .enumerate()
-            .skip(start_area_index.as_usize());
-        let current_free_list = free_lists_iter.next().map(|(id, head)| {
-            let free_list_id =
-                AreaIndex::try_from(id).expect("id is less than AreaIndex::NUM_AREA_SIZES");
-            let free_list_iter = FreeListIterator::new(
-                storage,
-                free_list_id,
-                *head,
-                FreeListParent::FreeListHead(free_list_id),
-            );
-            (free_list_id, free_list_iter)
-        });
+        let current_free_list = Some(Self::free_list_iterator(
+            storage,
+            free_lists,
+            start_area_index,
+        ));
         Self {
             storage,
-            free_lists_iter,
+            free_lists,
+            next_free_list_id: Self::next_area_index(start_area_index),
             current_free_list,
         }
+    }
+
+    fn free_list_iterator(
+        storage: &'a S,
+        free_lists: &FreeLists,
+        free_list_id: AreaIndex,
+    ) -> (AreaIndex, FreeListIterator<'a, S>) {
+        let free_list_iter = FreeListIterator::new(
+            storage,
+            free_list_id,
+            free_lists[free_list_id],
+            FreeListParent::FreeListHead(free_list_id),
+        );
+        (free_list_id, free_list_iter)
+    }
+
+    fn next_area_index(index: AreaIndex) -> Option<AreaIndex> {
+        let next_index = index.get().checked_add(1)?;
+        AreaIndex::new(next_index)
     }
 
     pub(crate) fn next_with_metadata(
@@ -482,19 +598,16 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
     }
 
     pub(crate) fn move_to_next_free_list(&mut self) {
-        let Some((next_free_list_id, next_free_list_head)) = self.free_lists_iter.next() else {
+        let Some(next_free_list_id) = self.next_free_list_id else {
             self.current_free_list = None;
             return;
         };
-        let next_free_list_id = AreaIndex::try_from(next_free_list_id)
-            .expect("next_free_list_id is less than AreaIndex::NUM_AREA_SIZES");
-        let next_free_list_iter = FreeListIterator::new(
+        self.next_free_list_id = Self::next_area_index(next_free_list_id);
+        self.current_free_list = Some(Self::free_list_iterator(
             self.storage,
+            self.free_lists,
             next_free_list_id,
-            *next_free_list_head,
-            FreeListParent::FreeListHead(next_free_list_id),
-        );
-        self.current_free_list = Some((next_free_list_id, next_free_list_iter));
+        ));
     }
 }
 
@@ -507,7 +620,7 @@ impl<S: ReadableStorage> Iterator for FreeListsIterator<'_, S> {
 }
 
 /// Extension methods for `NodeStore` to provide free list iteration capabilities
-impl<T, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
     /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     /// The iterator returns a tuple of the address and the area index of the free area.
     /// Since this is a low-level iterator, we avoid safe conversion to `AreaIndex` for performance.
@@ -523,7 +636,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 }
 
 // Functionalities use by the checker
-impl<T, S: WritableStorage> NodeStore<T, S> {
+impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
     /// Truncates a free list at the given parent location.
     ///
     /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
@@ -534,9 +647,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ) -> Result<(), FileIoError> {
         match free_list_parent {
             FreeListParent::FreeListHead(area_size_index) => {
-                *free_lists
-                    .get_mut(area_size_index.as_usize())
-                    .expect("area_size_index is less than AreaIndex::NUM_AREA_SIZES") = None;
+                free_lists[area_size_index] = None;
                 Ok(())
             }
             FreeListParent::PrevFreeArea {
@@ -589,23 +700,23 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 pub mod test_utils {
     use super::*;
-
-    use crate::NodeHashAlgorithm;
+    use crate::HashMode;
     use crate::node::Node;
+    use crate::nodestore::Committed;
+    use crate::nodestore::NodeStore;
+    use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::header::RootNodeInfo;
-    use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    pub fn test_write_new_node<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_new_node<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         node: &Node,
         offset: u64,
     ) -> (u64, u64) {
         let mut stored_area_bytes = Vec::new();
-        let area_size_index = node.as_bytes(&mut stored_area_bytes).unwrap();
+        let area_size_index = node.as_bytes::<H, _>(&mut stored_area_bytes).unwrap();
         let bytes_written = stored_area_bytes.len() as u64;
         nodestore
             .storage
@@ -615,8 +726,8 @@ pub mod test_utils {
     }
 
     // Helper function to write a free area to the given offset.
-    pub fn test_write_free_area<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_free_area<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         next_free_block: Option<LinearAddress>,
         area_size_index: AreaIndex,
         offset: u64,
@@ -627,13 +738,13 @@ pub mod test_utils {
     }
 
     // Helper function to write the NodeStoreHeader and return it
-    pub fn test_write_header<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_header<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         size: u64,
         root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) -> NodeStoreHeader {
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
         header.set_size(size);
         header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
@@ -642,8 +753,8 @@ pub mod test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
-    pub(crate) fn test_write_zeroed_area<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub(crate) fn test_write_zeroed_area<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         size: u64,
         offset: u64,
     ) {
@@ -653,14 +764,21 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::*;
-    use crate::area_index;
-    use crate::linear::memory::MemStore;
+    use firewood_macros::hash_mode;
     use rand::seq::IteratorRandom;
     use test_case::test_case;
-    use test_utils::{test_write_free_area, test_write_header};
+    use test_utils::test_write_free_area;
+    use test_utils::test_write_header;
+
+    use super::*;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::MerkleDbHash;
+    use crate::area_index;
+    use crate::linear::memory::MemStore;
+    use crate::nodestore::Committed;
 
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
@@ -679,12 +797,15 @@ mod tests {
         assert_eq!(result, expected, "Failed to parse FreeArea from {reader:?}");
     }
 
+    #[hash_mode]
     #[test]
+    #[expect(clippy::arithmetic_side_effects)]
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
-    fn free_list_iterator() {
+    fn free_list_iterator<H: HashMode>() {
         let mut rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -733,11 +854,14 @@ mod tests {
     }
 
     // Create two free lists and check that `free_list_iter_with_metadata` correctly returns the free areas and their parents
+    #[hash_mode]
     #[test]
-    fn free_list_iter_with_metadata() {
+    #[expect(clippy::arithmetic_side_effects)]
+    fn free_list_iter_with_metadata<H: HashMode>() {
         let rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -758,7 +882,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1.as_usize()] = next_free_block1;
+        free_lists[area_index1] = next_free_block1;
 
         // second free list
         let area_index2 = AreaIndex::new(
@@ -780,7 +904,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2.as_usize()] = next_free_block2;
+        free_lists[area_index2] = next_free_block2;
 
         // write header
         test_write_header(&nodestore, offset, None, free_lists);
@@ -852,18 +976,21 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
     #[expect(clippy::arithmetic_side_effects)]
-    fn free_lists_iter_skip_to_next_free_list() {
-        use test_utils::{test_write_free_area, test_write_header};
+    fn free_lists_iter_skip_to_next_free_list<H: HashMode>() {
+        use test_utils::test_write_free_area;
+        use test_utils::test_write_header;
 
         const AREA_INDEX1: AreaIndex = area_index!(3);
         const AREA_INDEX1_PLUS_1: AreaIndex = area_index!(4);
         const AREA_INDEX2: AreaIndex = area_index!(5);
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -882,7 +1009,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         assert_ne!(AREA_INDEX1, AREA_INDEX2);
@@ -899,7 +1026,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // write header
         test_write_header(&nodestore, offset, None, free_lists);
@@ -961,6 +1088,52 @@ mod tests {
         // `move_to_next_free_list` will do nothing since we are already at the end
         assert!(free_list_iter.current_free_list.is_none());
         assert!(free_list_iter.next_with_metadata().is_none());
+    }
+
+    #[hash_mode]
+    #[test]
+    fn test_read_stored_area_info<H: HashMode>() {
+        use test_utils::test_write_free_area;
+        use test_utils::test_write_new_node;
+
+        use crate::Path;
+        use crate::node::LeafNode;
+        use crate::node::Node;
+
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+
+        // write a free area
+        let free_index = area_index!(3);
+        let free_addr = NodeStoreHeader::SIZE;
+        test_write_free_area(&nodestore, None, free_index, free_addr);
+
+        let info = read_stored_area_info(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(free_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.kind, AreaKind::Free);
+        assert_eq!(info.index, free_index);
+        assert_eq!(info.size, free_index.size());
+
+        // write a node area
+        let node_addr = free_addr.checked_add(free_index.size()).unwrap();
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1, 2]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+        let (_, node_area_size) = test_write_new_node(&nodestore, &node, node_addr);
+
+        let info = read_stored_area_info(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(node_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.kind, AreaKind::Node);
+        assert_eq!(info.index.size(), node_area_size);
+        assert_eq!(info.size, node_area_size);
     }
 
     #[test]

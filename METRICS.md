@@ -11,8 +11,13 @@ use base-unit suffixes (`_seconds`, `_bytes`). Gauges carry no `_total` suffix.
 ### Rust applications
 
 Metrics are automatically recorded as instrumented code paths execute. Wire up
-any `metrics`-compatible recorder before starting the database. Example using
-the Prometheus exporter:
+any `metrics`-compatible recorder before starting the database. Which recorder
+you want depends on how the metrics leave the process.
+
+To expose a Prometheus scrape endpoint, use `metrics-exporter-prometheus`.
+`install` both registers the global recorder and spawns the exporter, so it
+needs one of the crate's exporter features (`http-listener` or `push-gateway`)
+and creates a Tokio runtime if it is not already called from within one:
 
 ```rust
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -22,9 +27,33 @@ PrometheusBuilder::new()
     .expect("failed to install Prometheus recorder");
 ```
 
-Pass the `HistogramMetricConfig` values returned by each crate's `registry::register()`
-to `set_buckets_for_metric` / `set_native_histogram_for_metric` so that the exporter
-uses the correct bucket strategy for each histogram.
+To consume metrics as structured Rust values rather than a rendered text
+payload, use `metrics-collector-prometheus`. It installs a recorder and nothing
+else — no exporter, no listener, no runtime — and `CollectorHandle::collect`
+returns a `MetricSnapshot` of typed counters, gauges, summaries, and classic and
+native histograms. This is what `firewood-ffi` uses so that the Go `Gatherer`
+can build `dto.MetricFamily` values without a parse round-trip:
+
+```rust
+use metrics_collector_prometheus::PrometheusCollectorBuilder;
+
+let handle = PrometheusCollectorBuilder::new()
+    .install()
+    .expect("failed to install Prometheus collector");
+
+let snapshot = handle.collect();
+```
+
+Neither recorder drives upkeep on its own. `collect` performs it as a side
+effect, so a process that collects regularly needs nothing further; a process
+that collects rarely should call `CollectorHandle::run_upkeep` on its own
+schedule, or `spawn_upkeep` for a dedicated thread, to keep rolling-summary data
+bounded.
+
+Both builders accept the `HistogramMetricConfig` values returned by each crate's
+`registry::register()`. Pass them to `set_buckets_for_metric` /
+`set_native_histogram_for_metric` so that each histogram uses the correct bucket
+strategy.
 
 ### Go / FFI applications
 
@@ -58,6 +87,12 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 ## Metric Reference
 
 ### Database layer (`firewood` crate)
+
+#### Build information
+
+| Metric                | Type  | Labels                    | Description                                                                                                                                                                                                                                                                                 |
+| --------------------- | ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firewood_build_info` | gauge | `version`, `git_describe` | Constant `1`, set when a database is opened. `version` is the cargo package version; `git_describe` is the `git describe` output (with a `-modified` suffix for a dirty worktree, empty outside a git checkout). Both are the same values the nodestore header persists into new databases. |
 
 #### Proposals
 
@@ -131,12 +166,6 @@ High tail latencies indicate write–read contention between concurrent commits 
 | `firewood_nodes_allocated_total`        | counter | `index` | Node allocations per size class                                   |
 | `firewood_nodes_deleted_total`          | counter | `index` | Node deletions per size class                                     |
 
-#### Free lists
-
-| Metric                       | Type  | Labels  | Description                                  |
-| ---------------------------- | ----- | ------- | -------------------------------------------- |
-| `firewood_free_list_entries` | gauge | `index` | Current entry count per free-list size class |
-
 #### Node reads
 
 | Metric                                   | Type    | Labels         | Description                                |
@@ -177,7 +206,7 @@ High tail latencies indicate write–read contention between concurrent commits 
 | ---------------------------------- | ------- | ------ | ------------------------- |
 | `firewood_rootstore_lookups_total` | counter | —      | Root-store fetch attempts |
 
-#### io_uring (only when `io-uring` feature is enabled)
+#### io_uring (only on Linux with the `io-uring` feature enabled)
 
 | Metric                                          | Type    | Labels | Description                                      |
 | ----------------------------------------------- | ------- | ------ | ------------------------------------------------ |
@@ -199,14 +228,16 @@ High tail latencies indicate write–read contention between concurrent commits 
 
 #### Go-side proof serialization
 
-These histograms are recorded in Go and are independent of the Rust recorder.
-They measure the full round-trip through the CGo boundary including any byte
-copies and pointer conversions.
+These histograms are recorded in Go, not through the Rust recorder. They
+measure the full round-trip through the CGo boundary including any byte copies
+and pointer conversions. Marshalling makes no database call and works after
+`Close`, so the marshal histogram has no `db_tag`. Unmarshalling runs on a
+database (`(*Database).Unmarshal*Proof`) and carries that database's `db_tag`.
 
-| Metric                                         | Type      | Labels       | Description                                                           |
-| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------------------------- |
-| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `MarshalBinary` duration; `proof_type=range\|change\|verified_change` |
-| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalBinary` duration; `proof_type=range\|change`                |
+| Metric                                         | Type      | Labels                 | Description                                            |
+| ---------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------ |
+| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type`           | `Marshal` duration; `proof_type=range\|change`         |
+| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type`, `db_tag` | `Unmarshal*Proof` duration; `proof_type=range\|change` |
 
 Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`
 
@@ -263,6 +294,10 @@ rate(firewood_storage_bytes_wasted_total[5m])
 
 # Database growth rate (bytes/sec)
 rate(firewood_storage_bytes_appended_total[5m])
+
+# Net free-list growth (bytes/sec); negative means free space is being consumed
+rate(firewood_storage_bytes_freed_total[5m])
+  - rate(firewood_storage_bytes_reused_total[5m])
 
 # I/O read throughput (bytes/sec)
 rate(firewood_io_bytes_read_total[1m])

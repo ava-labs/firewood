@@ -205,7 +205,7 @@ Useful optional controls:
 
 By default, `fwdctl launch` uses the embedded stage config from:
 
-- `benchmark/launch/launch-stages.yaml`
+- `fwdctl/launch/launch-stages.yaml`
 
 You can override this at runtime (without rebuilding) by creating:
 
@@ -216,10 +216,20 @@ Current embedded scenarios:
 - `reexecute`
 - `replay-log-gen`
 - `snapshotter`
+- `validator`
+
+The `validator` scenario restores a full avalanchego data directory from an S3
+snapshot and starts a Fuji node. It downloads `db/`, `chainData/`, and
+`configs/` from `s3://firewood-fuji-state-sync` (override with
+`--variable state_bucket=<bucket>`) into the node data dir
+(`--variable data_dir=<path>`, default `/mnt/nvme/ubuntu/data`), then launches
+avalanchego against the restored state. The snapshot's staking identity is
+intentionally skipped so the node generates a fresh NodeID on first boot.
 
 ## Operational behavior
 
 - Managed instances are tagged with `ManagedBy=fwdctl`
+- Newly launched instances include `Owner=<AWS caller identity>`
 - Only managed instances are targeted by `launch list` and `launch kill`
 - `launch list` marks instances launched by your current AWS identity with `*`
 - `launch kill` requires explicit confirmation unless `-y`/`--yes` is provided.

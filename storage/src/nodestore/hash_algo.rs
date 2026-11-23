@@ -8,10 +8,10 @@ pub struct NodeHashAlgorithmTryFromIntError(u64);
 
 /// The hash algorithm used by the node store.
 ///
-/// This must currently match the compile-time option. However, it will eventually
-/// be made a runtime option when initializing the node store. Therefore, the
-/// option is required when initializing and opening the node store to ensure
-/// compatibility and to detect any mismatches.
+/// This is a per-database runtime choice persisted in the file header. A
+/// database created under one scheme is opened under that same scheme; the
+/// requested algorithm is validated against the header at open time
+/// (`validate_open`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeHashAlgorithm {
     /// Use the MerkleDB node hashing algorithm, with sha256 as the hash function.
@@ -21,56 +21,18 @@ pub enum NodeHashAlgorithm {
     Ethereum,
 }
 
-// This is used in `validate_init` regardless of whether test code is being built.
-#[inline]
-const fn compile_option() -> NodeHashAlgorithm {
-    if cfg!(feature = "ethhash") {
-        NodeHashAlgorithm::Ethereum
-    } else {
-        NodeHashAlgorithm::MerkleDB
-    }
-}
-
 impl NodeHashAlgorithm {
-    /// Returns the hash algorithm that matches the compile-time option.
-    ///
-    /// Note: This function is only available in test builds or when the
-    /// `test_utils` feature is enabled (for upstream testing purposes).
+    /// Returns whether this is the Ethereum hash algorithm (Keccak-256,
+    /// account-aware nodes).
     #[must_use]
-    pub const fn compile_option() -> Self {
-        compile_option()
-    }
-
-    /// Returns whether this hash algorithm matches the compile-time option.
-    #[must_use]
-    pub const fn matches_compile_option(self) -> bool {
-        match self {
-            NodeHashAlgorithm::MerkleDB => !cfg!(feature = "ethhash"),
-            NodeHashAlgorithm::Ethereum => cfg!(feature = "ethhash"),
-        }
+    pub const fn is_ethereum(self) -> bool {
+        matches!(self, NodeHashAlgorithm::Ethereum)
     }
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
             NodeHashAlgorithm::MerkleDB => "MerkleDB",
             NodeHashAlgorithm::Ethereum => "Ethereum",
-        }
-    }
-
-    // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-    pub(crate) fn validate_init(self) -> std::io::Result<()> {
-        if self.matches_compile_option() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                format!(
-                    "node store hash algorithm mismatch: want to initialize with {}, \
-                     but build option is for {}",
-                    self.name(),
-                    compile_option().name()
-                ),
-            ))
         }
     }
 

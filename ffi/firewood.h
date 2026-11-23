@@ -40,7 +40,6 @@ typedef struct CodeIteratorHandle CodeIteratorHandle;
  * A handle to the database, returned by `fwd_open_db`.
  *
  * These handles are passed to the other FFI functions.
- *
  */
 typedef struct DatabaseHandle DatabaseHandle;
 
@@ -58,7 +57,7 @@ typedef struct IteratorHandle IteratorHandle;
 typedef struct ProposalHandle ProposalHandle;
 
 /**
- * FFI context for for a parsed or generated range proof.
+ * FFI context for a parsed or generated range proof.
  */
 typedef struct RangeProofContext RangeProofContext;
 
@@ -103,7 +102,11 @@ typedef struct OwnedSlice_u8 OwnedBytes;
  * A result type returned from FFI functions return the database root hash. This
  * may or may not be after a mutation.
  */
-enum HashResult_Tag {
+enum HashResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -130,7 +133,11 @@ enum HashResult_Tag {
    */
   HashResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum HashResult_Tag HashResult_Tag;
+#else
 typedef size_t HashResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct HashResult {
   HashResult_Tag tag;
@@ -194,10 +201,15 @@ typedef struct BorrowedSlice_u8 BorrowedBytes;
  * Callers should use the appropriate variant (`Put`, `Delete`, `DeleteRange`)
  * to express their intent.
  */
-enum BatchOp_Tag {
+enum BatchOp_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * Insert or update a key with a value.
-   * The value may be empty (zero-length).
+   * The value may be empty (zero-length), except under the Ethereum hash
+   * scheme, which rejects an empty value.
    */
   BatchOp_Put,
   /**
@@ -209,7 +221,11 @@ enum BatchOp_Tag {
    */
   BatchOp_DeleteRange,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum BatchOp_Tag BatchOp_Tag;
+#else
 typedef size_t BatchOp_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct BatchOp_Put_Body {
   BorrowedBytes key;
@@ -275,7 +291,11 @@ typedef struct BorrowedSlice_BatchOp BorrowedBatchOps;
  * The result type returned from an FFI function that returns no value but may
  * return an error.
  */
-enum VoidResult_Tag {
+enum VoidResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -295,7 +315,11 @@ enum VoidResult_Tag {
    */
   VoidResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum VoidResult_Tag VoidResult_Tag;
+#else
 typedef size_t VoidResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct VoidResult {
   VoidResult_Tag tag;
@@ -307,12 +331,68 @@ typedef struct VoidResult {
 } VoidResult;
 
 /**
+ * A result type returned from FFI functions that create an code hash iterator
+ */
+enum CodeIteratorResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to a proof handle.
+   */
+  CodeIteratorResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  CodeIteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  CodeIteratorResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum CodeIteratorResult_Tag CodeIteratorResult_Tag;
+#else
+typedef size_t CodeIteratorResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct CodeIteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`CodeIteratorHandle`].
+   * The value should be freed with [`fwd_code_hash_iter_free`]
+   *
+   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+   */
+  struct CodeIteratorHandle *handle;
+} CodeIteratorResult_Ok_Body;
+
+typedef struct CodeIteratorResult {
+  CodeIteratorResult_Tag tag;
+  union {
+    CodeIteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} CodeIteratorResult;
+
+/**
  * Maybe is a C-compatible optional type using a tagged union pattern.
  *
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-enum Maybe_OwnedBytes_Tag {
+enum Maybe_OwnedBytes_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * No value present.
    */
@@ -322,7 +402,11 @@ enum Maybe_OwnedBytes_Tag {
    */
   Maybe_OwnedBytes_Some_OwnedBytes,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum Maybe_OwnedBytes_Tag Maybe_OwnedBytes_Tag;
+#else
 typedef size_t Maybe_OwnedBytes_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct Maybe_OwnedBytes {
   Maybe_OwnedBytes_Tag tag;
@@ -334,24 +418,29 @@ typedef struct Maybe_OwnedBytes {
 } Maybe_OwnedBytes;
 
 /**
- * A key range that should be fetched to continue iterating through a range
- * or change proof that was truncated. Represents a half-open range
- * `[start_key, end_key)`. If `end_key` is `None`, the range is unbounded
- * and continues to the end of the keyspace.
+ * A key range still to fetch after a truncated range or change proof,
+ * `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
+ * above the last one already synchronized, so passing it as the next
+ * request's start bound resumes without covering that key again. An absent
+ * `end_key` means the range is unbounded above.
  */
 typedef struct NextKeyRange {
   /**
-   * The start key of the next range to fetch.
+   * The inclusive start key of the next range to fetch.
    */
   OwnedBytes start_key;
   /**
-   * If set, a non-inclusive upper bound for the next range to fetch. If not
+   * If set, the inclusive upper bound of the next range to fetch. If not
    * set, the range is unbounded (this is the final range).
    */
   struct Maybe_OwnedBytes end_key;
 } NextKeyRange;
 
-enum NextKeyRangeResult_Tag {
+enum NextKeyRangeResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -379,7 +468,11 @@ enum NextKeyRangeResult_Tag {
    */
   NextKeyRangeResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum NextKeyRangeResult_Tag NextKeyRangeResult_Tag;
+#else
 typedef size_t NextKeyRangeResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct NextKeyRangeResult {
   NextKeyRangeResult_Tag tag;
@@ -399,7 +492,11 @@ typedef struct NextKeyRangeResult {
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-enum Maybe_BorrowedBytes_Tag {
+enum Maybe_BorrowedBytes_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * No value present.
    */
@@ -409,7 +506,11 @@ enum Maybe_BorrowedBytes_Tag {
    */
   Maybe_BorrowedBytes_Some_BorrowedBytes,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum Maybe_BorrowedBytes_Tag Maybe_BorrowedBytes_Tag;
+#else
 typedef size_t Maybe_BorrowedBytes_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct Maybe_BorrowedBytes {
   Maybe_BorrowedBytes_Tag tag;
@@ -421,70 +522,13 @@ typedef struct Maybe_BorrowedBytes {
 } Maybe_BorrowedBytes;
 
 /**
- * A result type returned from FFI functions that create or parse change proofs.
- *
- * The caller must ensure that [`fwd_free_change_proof`] is called to
- * free the memory associated with the returned context when it is no longer
- * needed.
- *
- * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
- */
-enum ChangeProofResult_Tag {
-  /**
-   * The caller provided a null pointer to the input handle.
-   */
-  ChangeProofResult_NullHandlePointer,
-  /**
-   * The provided start root was not found in the database.
-   */
-  ChangeProofResult_StartRevisionNotFound,
-  /**
-   * The provided end root was not found in the database.
-   */
-  ChangeProofResult_EndRevisionNotFound,
-  /**
-   * The proof was successfully created or parsed.
-   *
-   * If the value was parsed from a serialized proof, this does not imply that
-   * the proof is valid, only that it is well-formed. The verify method must
-   * be called to ensure the proof is cryptographically valid.
-   */
-  ChangeProofResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
-   * value is guaranteed to contain only valid UTF-8.
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  ChangeProofResult_Err,
-};
-typedef size_t ChangeProofResult_Tag;
-
-typedef struct ChangeProofResult {
-  ChangeProofResult_Tag tag;
-  union {
-    struct {
-      struct HashKey start_revision_not_found;
-    };
-    struct {
-      struct HashKey end_revision_not_found;
-    };
-    struct {
-      struct ChangeProofContext *ok;
-    };
-    struct {
-      OwnedBytes err;
-    };
-  };
-} ChangeProofResult;
-
-/**
  * A result type returned from FFI functions that retrieve a single value.
  */
-enum ValueResult_Tag {
+enum ValueResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -517,7 +561,11 @@ enum ValueResult_Tag {
    */
   ValueResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ValueResult_Tag ValueResult_Tag;
+#else
 typedef size_t ValueResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ValueResult {
   ValueResult_Tag tag;
@@ -537,7 +585,11 @@ typedef struct ValueResult {
 /**
  * A result type returned from FFI functions that create a reconstructed view.
  */
-enum ReconstructedResult_Tag {
+enum ReconstructedResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an input handle.
    */
@@ -551,7 +603,11 @@ enum ReconstructedResult_Tag {
    */
   ReconstructedResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ReconstructedResult_Tag ReconstructedResult_Tag;
+#else
 typedef size_t ReconstructedResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ReconstructedResult_Ok_Body {
   /**
@@ -572,6 +628,75 @@ typedef struct ReconstructedResult {
     };
   };
 } ReconstructedResult;
+
+/**
+ * A result type returned from FFI functions that create or parse change proofs.
+ *
+ * The caller must ensure that [`fwd_free_change_proof`] is called to
+ * free the memory associated with the returned context when it is no longer
+ * needed.
+ *
+ * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+ */
+enum ChangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  ChangeProofResult_NullHandlePointer,
+  /**
+   * The provided start root was not found in the database.
+   */
+  ChangeProofResult_StartRevisionNotFound,
+  /**
+   * The provided end root was not found in the database.
+   */
+  ChangeProofResult_EndRevisionNotFound,
+  /**
+   * The proof was successfully created or parsed.
+   *
+   * If the value was parsed from a serialized proof, this does not imply that
+   * the proof is valid, only that it is well-formed. The verify method must
+   * be called to ensure the proof is cryptographically valid.
+   */
+  ChangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  ChangeProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
+#else
+typedef size_t ChangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct ChangeProofResult {
+  ChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey start_revision_not_found;
+    };
+    struct {
+      struct HashKey end_revision_not_found;
+    };
+    struct {
+      struct ChangeProofContext *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} ChangeProofResult;
 
 /**
  * Arguments for creating a change proof.
@@ -617,7 +742,11 @@ typedef struct CreateChangeProofArgs {
  *
  * [`fwd_free_range_proof`]: crate::fwd_free_range_proof
  */
-enum RangeProofResult_Tag {
+enum RangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -649,7 +778,11 @@ enum RangeProofResult_Tag {
    */
   RangeProofResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RangeProofResult_Tag RangeProofResult_Tag;
+#else
 typedef size_t RangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RangeProofResult {
   RangeProofResult_Tag tag;
@@ -683,7 +816,7 @@ typedef struct CreateRangeProofArgs {
   struct Maybe_BorrowedBytes start_key;
   /**
    * The end key of the range to prove. If `None`, the range ends at the end
-   * of the keyspace or until `max_length` items have been been included in
+   * of the keyspace or until `max_length` items have been included in
    * the proof.
    *
    * If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -725,8 +858,9 @@ typedef struct VerifyRangeProofArgs {
    * The upper bound of the key range that the proof is expected to cover. If
    * `None`, the proof is expected to cover to the end of the keyspace.
    *
-   * This is ignored if the proof is truncated and does not cover the full,
-   * in which case the upper bound key is the final key in the key-value pairs.
+   * This is a ceiling, not an assertion: a proof carrying a key above this
+   * bound is invalid, but a truncated proof may prove less and anchor at
+   * its own right edge instead.
    */
   struct Maybe_BorrowedBytes end_key;
   /**
@@ -741,7 +875,11 @@ typedef struct VerifyRangeProofArgs {
  * A result type returned from FFI functions that create a proposal but do not
  * commit it to the database.
  */
-enum ProposalResult_Tag {
+enum ProposalResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -762,7 +900,11 @@ enum ProposalResult_Tag {
    */
   ProposalResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ProposalResult_Tag ProposalResult_Tag;
+#else
 typedef size_t ProposalResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ProposalResult_Ok_Body {
   /**
@@ -789,6 +931,180 @@ typedef struct ProposalResult {
     };
   };
 } ProposalResult;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedBytes {
+  OwnedBytes *ptr;
+  size_t len;
+} OwnedSlice_OwnedBytes;
+
+/**
+ * An owned, C-friendly per-slot storage proof inside an [`EthProofOwned`].
+ */
+typedef struct EthStorageProofOwned {
+  /**
+   * The requested 32-byte slot key, echoed back from the caller's input.
+   */
+  uint8_t key[32];
+  /**
+   * The stored slot value, or [`Maybe::None`] for an exclusion proof.
+   */
+  struct Maybe_OwnedBytes value;
+  /**
+   * MPT-RLP-encoded storage-trie nodes, root-to-leaf order. Empty when the
+   * account has no storage at all.
+   */
+  struct OwnedSlice_OwnedBytes proof;
+} EthStorageProofOwned;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_EthStorageProofOwned {
+  struct EthStorageProofOwned *ptr;
+  size_t len;
+} OwnedSlice_EthStorageProofOwned;
+
+/**
+ * An owned, C-friendly `eth_getProof` result.
+ *
+ * Mirrors [`firewood::EthProof`] but with FFI-safe owned buffers. All byte
+ * arrays are heap-owned by Rust and must be freed by passing the enclosing
+ * value to [`fwd_free_eth_proof`].
+ */
+typedef struct EthProofOwned {
+  /**
+   * Account transaction count.
+   */
+  uint64_t nonce;
+  /**
+   * Account balance, zero-padded big-endian.
+   */
+  uint8_t balance[32];
+  /**
+   * Keccak-256 of the account's contract code (empty-code hash if none).
+   */
+  uint8_t code_hash[32];
+  /**
+   * Storage trie root as embedded in the account leaf (empty-trie root for
+   * absent accounts).
+   */
+  uint8_t storage_hash[32];
+  /**
+   * MPT-RLP-encoded account-trie nodes, root-to-leaf order.
+   */
+  struct OwnedSlice_OwnedBytes account_proof;
+  /**
+   * Per-slot storage proofs, one entry per requested key, in input order.
+   */
+  struct OwnedSlice_EthStorageProofOwned storage_proofs;
+} EthProofOwned;
+
+/**
+ * A result type returned from [`fwd_eth_get_proof`].
+ *
+ * The caller must call [`fwd_free_eth_proof`] to free the memory associated
+ * with a returned [`EthProofOwned`] when it is no longer needed.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ * [`fwd_free_eth_proof`]: crate::fwd_free_eth_proof
+ */
+enum EthProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the revision handle.
+   */
+  EthProofResult_NullHandlePointer,
+  /**
+   * The database is not running in ethereum hash mode, so an
+   * `eth_getProof`-compatible proof cannot be produced.
+   */
+  EthProofResult_NotSupported,
+  /**
+   * The proof was successfully produced.
+   */
+  EthProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  EthProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum EthProofResult_Tag EthProofResult_Tag;
+#else
+typedef size_t EthProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct EthProofResult {
+  EthProofResult_Tag tag;
+  union {
+    struct {
+      struct EthProofOwned *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} EthProofResult;
+
+/**
+ * A borrowed byte slice. Used to represent data that was passed in from C
+ * callers and will not be freed or retained by Rust code.
+ */
+typedef struct BorrowedSlice_BorrowedBytes {
+  /**
+   * A pointer to the slice of bytes. This can be null if the slice is empty.
+   *
+   * If the pointer is not null, it must point to a valid slice of `len`
+   * elements sized and aligned for `T`.
+   *
+   * As a note, [`NonNull`] is not appropriate here because [`NonNull`] pointer
+   * provenance requires mutable access to the pointer, which is not an invariant
+   * we want to enforce here. We want (and require) the pointer to be immutable.
+   *
+   * [`NonNull`]: std::ptr::NonNull
+   */
+  const BorrowedBytes *ptr;
+  /**
+   * The length of the slice. It is ignored if the pointer is null; however,
+   * if the pointer is not null, it must be equal to the number of elements
+   * pointed to by `ptr`.
+   */
+  size_t len;
+} BorrowedSlice_BorrowedBytes;
+
+/**
+ * A type alias for a borrowed slice of borrowed byte slices (a 2D byte array).
+ *
+ * C callers can use this to pass in an array of byte slices, e.g. a list of
+ * 32-byte storage keys for [`fwd_eth_get_proof`]. Neither the outer array nor
+ * the inner slices are freed by Rust code.
+ *
+ * C callers must ensure that the pointer, if not null, points to a valid slice
+ * of [`BorrowedBytes`] of length `len`, and that each inner slice is itself
+ * valid. Everything must remain valid for the duration of the C function call
+ * that was passed this slice.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ */
+typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
 
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
@@ -940,7 +1256,11 @@ typedef struct OwnedNativeHistogram {
 /**
  * A C-compatible tagged union representing a metric value.
  */
-enum OwnedMetricValue_Tag {
+enum OwnedMetricValue_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   OwnedMetricValue_Counter,
   OwnedMetricValue_Gauge,
   OwnedMetricValue_Summary,
@@ -948,7 +1268,11 @@ enum OwnedMetricValue_Tag {
   OwnedMetricValue_NativeHistogram,
   OwnedMetricValue_Unknown,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum OwnedMetricValue_Tag OwnedMetricValue_Tag;
+#else
 typedef size_t OwnedMetricValue_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct OwnedMetricValue {
   OwnedMetricValue_Tag tag;
@@ -1021,7 +1345,11 @@ typedef struct OwnedSlice_OwnedMetricFamily OwnedRenderedMetrics;
  *
  * [`fwd_gather_rendered`]: crate::fwd_gather_rendered
  */
-enum RenderedMetricsResult_Tag {
+enum RenderedMetricsResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The metrics were successfully gathered.
    *
@@ -1042,7 +1370,11 @@ enum RenderedMetricsResult_Tag {
    */
   RenderedMetricsResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RenderedMetricsResult_Tag RenderedMetricsResult_Tag;
+#else
 typedef size_t RenderedMetricsResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RenderedMetricsResult {
   RenderedMetricsResult_Tag tag;
@@ -1059,7 +1391,11 @@ typedef struct RenderedMetricsResult {
 /**
  * A result type returned from FFI functions that get a revision
  */
-enum RevisionResult_Tag {
+enum RevisionResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -1084,7 +1420,11 @@ enum RevisionResult_Tag {
    */
   RevisionResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RevisionResult_Tag RevisionResult_Tag;
+#else
 typedef size_t RevisionResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RevisionResult_Ok_Body {
   /**
@@ -1116,7 +1456,11 @@ typedef struct RevisionResult {
 /**
  * A result type returned from iterator FFI functions
  */
-enum KeyValueResult_Tag {
+enum KeyValueResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -1145,7 +1489,11 @@ enum KeyValueResult_Tag {
    */
   KeyValueResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum KeyValueResult_Tag KeyValueResult_Tag;
+#else
 typedef size_t KeyValueResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct KeyValueResult {
   KeyValueResult_Tag tag;
@@ -1162,7 +1510,11 @@ typedef struct KeyValueResult {
 /**
  * A result type returned from iterator FFI functions
  */
-enum KeyValueBatchResult_Tag {
+enum KeyValueBatchResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -1182,7 +1534,11 @@ enum KeyValueBatchResult_Tag {
    */
   KeyValueBatchResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum KeyValueBatchResult_Tag KeyValueBatchResult_Tag;
+#else
 typedef size_t KeyValueBatchResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct KeyValueBatchResult {
   KeyValueBatchResult_Tag tag;
@@ -1199,7 +1555,11 @@ typedef struct KeyValueBatchResult {
 /**
  * A result type returned from FFI functions that create an iterator
  */
-enum IteratorResult_Tag {
+enum IteratorResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a revision/proposal handle.
    */
@@ -1218,7 +1578,11 @@ enum IteratorResult_Tag {
    */
   IteratorResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum IteratorResult_Tag IteratorResult_Tag;
+#else
 typedef size_t IteratorResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct IteratorResult_Ok_Body {
   /**
@@ -1243,7 +1607,11 @@ typedef struct IteratorResult {
 /**
  * The result type returned from the open or create database functions.
  */
-enum HandleResult_Tag {
+enum HandleResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The database was opened or created successfully and the handle is
    * returned as an opaque pointer.
@@ -1265,7 +1633,11 @@ enum HandleResult_Tag {
    */
   HandleResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum HandleResult_Tag HandleResult_Tag;
+#else
 typedef size_t HandleResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct HandleResult {
   HandleResult_Tag tag;
@@ -1309,15 +1681,18 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
-   * Must be > `deferred_persistence_commit_count`.
+   * Must be > `max_persistence_gap`.
    */
   size_t revisions;
   /**
@@ -1343,66 +1718,32 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This is the per-database node-hashing scheme, selected at runtime. For
+   * an existing database it must match the scheme persisted in the file
+   * header (a mismatch is an error); for a fresh database it is the scheme
+   * to create with. A single binary can open both
+   * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+   * databases regardless of the database's runtime hash mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum number of unpersisted revisions that can exist at a given time.
+   * The maximum number of committed revisions that can be ahead of the last persisted revision.
    *
-   * Note: `revisions` must be > `deferred_persistence_commit_count`.
+   * Must be positive and less than `revisions`.
    */
-  uint64_t deferred_persistence_commit_count;
+  uint64_t max_persistence_gap;
 } DatabaseHandleArgs;
-
-/**
- * A result type returned from FFI functions that create an code hash iterator
- */
-enum CodeIteratorResult_Tag {
-  /**
-   * The caller provided a null pointer to a proof handle.
-   */
-  CodeIteratorResult_NullHandlePointer,
-  /**
-   * Building the iterator was successful and the iterator handle is returned
-   */
-  CodeIteratorResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`].
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  CodeIteratorResult_Err,
-};
-typedef size_t CodeIteratorResult_Tag;
-
-typedef struct CodeIteratorResult_Ok_Body {
-  /**
-   * An opaque pointer to the [`CodeIteratorHandle`].
-   * The value should be freed with [`fwd_code_hash_iter_free`]
-   *
-   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
-   */
-  struct CodeIteratorHandle *handle;
-} CodeIteratorResult_Ok_Body;
-
-typedef struct CodeIteratorResult {
-  CodeIteratorResult_Tag tag;
-  union {
-    CodeIteratorResult_Ok_Body ok;
-    struct {
-      OwnedBytes err;
-    };
-  };
-} CodeIteratorResult;
 
 /**
  * Arguments for initializing logging for the Firewood FFI.
@@ -1467,6 +1808,34 @@ struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedBatchOps va
 struct VoidResult fwd_block_replay_flush(void);
 
 /**
+ * Returns an iterator over the code hashes contained in the change proof.
+ * The iterator must be freed after use.
+ *
+ * Only `BatchOp::Put` entries contribute code hashes; `Delete` and
+ * `DeleteRange` entries are skipped. Can be called at any time after
+ * the proof has been created.
+ *
+ * # Arguments
+ *
+ * - `proof` - A [`ChangeProofContext`] previously returned from the create
+ *   method or deserialized from bytes.
+ *
+ * # Returns
+ *
+ * - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
+ * - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be created.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context
+ * nor is it safe to call any other function that accesses the same proof context
+ * concurrently. The caller must ensure exclusive access to the proof context
+ * for the duration of the call.
+ */
+struct CodeIteratorResult fwd_change_proof_code_hash_iter(const struct ChangeProofContext *proof);
+
+/**
  * Determine the next key range to fetch for a change proof.
  *
  * The proof is not consumed by this call. `end_key` is the original
@@ -1479,24 +1848,6 @@ struct VoidResult fwd_block_replay_flush(void);
  */
 struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProofContext *proof,
                                                          struct Maybe_BorrowedBytes end_key);
-
-/**
- * Deserialize a `ChangeProof` from bytes.
- *
- * # Arguments
- *
- * * `bytes` - The bytes to deserialize the proof from.
- *
- * # Returns
- *
- * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
- * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed. Use [`fwd_db_verify_change_proof`] or
- *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
- * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
- */
-struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -1592,8 +1943,8 @@ struct VoidResult fwd_code_hash_iter_free(struct CodeIteratorHandle *iter);
  *
  * # Arguments
  *
- * - `iter` - A [`CodeIteratorHandle`] previously returned from the
- *   `fwd_range_proof_code_hash_iter` method.
+ * - `iter` - A [`CodeIteratorHandle`] previously returned from a proof's
+ *   code-hash-iterator function.
  *
  * # Returns
  *
@@ -1627,8 +1978,8 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided database handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing the batch.
  *
@@ -1650,8 +2001,8 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing or rebasing.
  *
@@ -1691,6 +2042,26 @@ struct HashResult fwd_commit_proposal_with_rebase(struct ProposalHandle *proposa
  */
 struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
                                              struct CreateChangeProofArgs args);
+
+/**
+ * Deserialize a change proof from bytes for use with `db`.
+ *
+ * The database supplies the hash mode the proof must be encoded with; a
+ * proof whose header advertises another mode is rejected here, before its
+ * body is decompressed, rather than at verification.
+ *
+ * # Returns
+ *
+ * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+ * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed and uses `db`'s hash mode. Use [`fwd_db_verify_change_proof`] or
+ *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
+ * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed
+ *   or its hash mode does not match `db`'s.
+ */
+struct ChangeProofResult fwd_db_change_proof_from_bytes(const struct DatabaseHandle *db,
+                                                        BorrowedBytes bytes);
 
 /**
  * Dumps the Trie structure of the latest revision of the database to a DOT
@@ -1737,6 +2108,30 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
 
 /**
+ * Deserialize a range proof from bytes for use with `db`.
+ *
+ * The database supplies the hash mode the proof must be encoded with; a
+ * proof whose header advertises another mode is rejected here, before its
+ * body is decompressed, rather than at verification.
+ *
+ * # Arguments
+ *
+ * - `db` - The database the proof will be verified against.
+ * - `bytes` - The bytes to deserialize the proof from.
+ *
+ * # Returns
+ *
+ * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+ * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
+ * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
+ *   or its hash mode does not match `db`'s.
+ */
+struct RangeProofResult fwd_db_range_proof_from_bytes(const struct DatabaseHandle *db,
+                                                      BorrowedBytes bytes);
+
+/**
  * Verify and commit a change proof in a single call.
  *
  * Verifies structural validity and root hash, creates a proposal, and
@@ -1748,8 +2143,8 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  *
  * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
  *   to either the database or the proof.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] containing the new root hash.
  * - [`HashResult::Err`] if verification or commit failed.
  */
@@ -1841,6 +2236,65 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
                                             struct VerifyRangeProofArgs args);
 
 /**
+ * Produce an `eth_getProof`-compatible proof for an account and a set of
+ * storage slots against the given revision.
+ *
+ * The returned proof bytes are canonical RLP-encoded Ethereum MPT nodes that a
+ * verifier such as go-ethereum's `trie.VerifyProof` accepts. Absent accounts
+ * come back with zero account scalars plus the empty-code and empty-trie
+ * hashes; the proof bytes distinguish inclusion from exclusion.
+ *
+ * # Arguments
+ *
+ * - `revision` - The revision handle to prove against.
+ * - `account_key` - The account's 32-byte trie key (`keccak256(address)`).
+ * - `storage_keys` - An array of 32-byte slot trie keys
+ *   (`keccak256(slot)`), in the order the proofs should be returned.
+ *
+ * Callers are responsible for keccak-hashing addresses and slots into their
+ * 32-byte trie-key forms before calling this function.
+ *
+ * # Returns
+ *
+ * - [`EthProofResult::NullHandlePointer`] if `revision` is null.
+ * - [`EthProofResult::NotSupported`] if the database is not running in
+ *   ethereum hash mode.
+ * - [`EthProofResult::Ok`] containing the proof on success.
+ * - [`EthProofResult::Err`] containing an error message otherwise (including
+ *   when a key is not exactly 32 bytes long).
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * ensure that `account_key` is a valid [`BorrowedBytes`] and each entry of
+ *   `storage_keys` is a valid [`BorrowedBytes`].
+ * * call [`fwd_free_eth_proof`] to free a returned [`EthProofOwned`], and
+ *   [`fwd_free_owned_bytes`] to free a returned error message.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct EthProofResult fwd_eth_get_proof(const struct RevisionHandle *revision,
+                                        BorrowedBytes account_key,
+                                        BorrowedBytes2D storage_keys);
+
+/**
+ * Produce an `eth_getProof`-compatible proof against a reconstructed view
+ * rather than a committed revision.
+ *
+ * See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+ * and key-encoding requirements.
+ *
+ * # Safety
+ *
+ * As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+ * a [`ReconstructedHandle`].
+ */
+struct EthProofResult fwd_eth_get_proof_on_reconstructed(const struct ReconstructedHandle *reconstructed,
+                                                         BorrowedBytes account_key,
+                                                         BorrowedBytes2D storage_keys);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments
@@ -1853,6 +2307,21 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
+
+/**
+ * Frees the memory associated with an [`EthProofOwned`].
+ *
+ * # Arguments
+ *
+ * * `proof` - The [`EthProofOwned`] to free, previously returned from
+ *   [`fwd_eth_get_proof`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
 
 /**
  * Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
@@ -1872,7 +2341,6 @@ struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
  *
  * The caller must ensure that the `iterator` is not null and that it points to
  * a valid [`IteratorHandle`] previously returned by a function from this library.
- *
  */
 struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
 
@@ -2220,7 +2688,6 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, struct H
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
  *   to free the memory associated with the returned value.
- *
  */
 struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 
@@ -2250,7 +2717,6 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
- *
  */
 struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t n);
 
@@ -2275,7 +2741,6 @@ struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t
  * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
  * * ensure that `key` is a valid for [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
@@ -2324,7 +2789,6 @@ struct IteratorResult fwd_iter_on_reconstructed(const struct ReconstructedHandle
  * * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
  * * ensure that `key` is a valid [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
                                            BorrowedBytes key);
@@ -2487,23 +2951,6 @@ struct CodeIteratorResult fwd_range_proof_code_hash_iter(const struct RangeProof
 struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext *proof);
 
 /**
- * Deserialize a `RangeProof` from bytes.
- *
- * # Arguments
- *
- * - `bytes` - The bytes to deserialize the proof from.
- *
- * # Returns
- *
- * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
- * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
- * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
- */
-struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
-
-/**
  * Serialize a `RangeProof` to bytes.
  *
  * # Arguments
@@ -2516,7 +2963,7 @@ struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
+ * - [`ValueResult::Err`] containing an error message if serialization panicked.
  */
 struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proof);
 
