@@ -12,6 +12,7 @@ use firewood_storage::HashMode;
 use firewood_storage::MerkleDbHash;
 
 use super::TestDb;
+use crate::api;
 use crate::api::BatchOp;
 use crate::api::Db as _;
 use crate::api::Proposal as _;
@@ -54,10 +55,12 @@ fn leaked_bytes(report: &CheckerReport) -> u64 {
         .sum()
 }
 
-/// Runs one fixed workload and returns the bytes the checker reports as
-/// leaked at its end. With `through_empty_parent`, the middle batch is
-/// proposed on top of an empty proposal that commits first.
-fn leaked_after_workload<H: HashMode>(through_empty_parent: bool) -> u64 {
+/// Seeds a database, runs `workload` on it, commits until every revision the
+/// workload touched has aged out, and returns the bytes the checker reports as
+/// leaked.
+///
+/// Panics if the checker reports anything other than leaked areas.
+fn leaked_after<H: HashMode>(workload: impl FnOnce(&TestDb<H>)) -> u64 {
     let cfg = DbConfig::builder()
         .manager(RevisionManagerConfig::builder().max_revisions(2).build())
         .build();
@@ -65,15 +68,7 @@ fn leaked_after_workload<H: HashMode>(through_empty_parent: bool) -> u64 {
     let seed: Vec<Op> = (0u8..32).map(|i| put(i.wrapping_mul(37), i)).collect();
     db.propose(seed).unwrap().commit().unwrap();
 
-    let batch = vec![put(0xaa, 0)];
-    if through_empty_parent {
-        let empty = db.propose(Vec::<Op>::new()).unwrap();
-        let child = empty.propose(batch).unwrap();
-        empty.commit().unwrap();
-        child.commit().unwrap();
-    } else {
-        db.propose(batch).unwrap().commit().unwrap();
-    }
+    workload(&db);
 
     // age every revision above out of the in-memory window
     for i in 0..8 {
@@ -94,6 +89,17 @@ fn leaked_after_workload<H: HashMode>(through_empty_parent: bool) -> u64 {
     leaked_bytes(&report)
 }
 
+/// Asserts that `workload` leaves the space accounting that committing each of
+/// `direct` on the latest revision in turn leaves.
+fn assert_leaks_like<H: HashMode>(direct: &[Op], workload: impl FnOnce(&TestDb<H>)) {
+    let expected = leaked_after::<H>(|db| {
+        for op in direct {
+            db.propose(vec![op.clone()]).unwrap().commit().unwrap();
+        }
+    });
+    assert_eq!(leaked_after::<H>(workload), expected);
+}
+
 /// A proposal whose root hash equals its parent's commits through the trivial
 /// path, which drops it along with its deleted list. A child proposal built
 /// on it is reparented onto the current revision, but the nodes of that
@@ -102,11 +108,60 @@ fn leaked_after_workload<H: HashMode>(through_empty_parent: bool) -> u64 {
 #[hash_mode]
 #[test]
 fn test_trivial_commit_with_child_frees_replaced_nodes<H: HashMode>() {
-    let direct = leaked_after_workload::<H>(false);
-    let through_empty_parent = leaked_after_workload::<H>(true);
-    assert_eq!(
-        through_empty_parent, direct,
-        "the same changes leak {through_empty_parent} bytes through an empty parent proposal \
-         and {direct} bytes without one"
-    );
+    assert_leaks_like::<H>(&[put(0xaa, 0)], |db| {
+        let absorbed = db.propose(Vec::<Op>::new()).unwrap();
+        let child = absorbed.propose(vec![put(0xaa, 0)]).unwrap();
+        absorbed.commit().unwrap();
+        child.commit().unwrap();
+    });
+}
+
+/// Both children inherit the same nodes, and only the one that commits on the
+/// current revision frees them.
+#[hash_mode]
+#[test]
+fn test_trivial_commit_with_two_children_and_a_rebase<H: HashMode>() {
+    assert_leaks_like::<H>(&[put(0xaa, 0), put(0xbb, 0)], |db| {
+        let absorbed = db.propose(Vec::<Op>::new()).unwrap();
+        let first = absorbed.propose(vec![put(0xaa, 0)]).unwrap();
+        let second = absorbed.propose(vec![put(0xbb, 0)]).unwrap();
+        absorbed.commit().unwrap();
+        first.commit().unwrap();
+        second.commit_with_rebase().unwrap();
+    });
+}
+
+/// Inherited nodes pass through a second trivial commit, and a sibling that
+/// holds some of the same nodes frees nothing when its commit is rejected.
+#[hash_mode]
+#[test]
+fn test_trivial_commit_chain_with_a_rejected_sibling<H: HashMode>() {
+    assert_leaks_like::<H>(&[put(0xaa, 0)], |db| {
+        let absorbed = db.propose(Vec::<Op>::new()).unwrap();
+        let absorbed_child = absorbed.propose(Vec::<Op>::new()).unwrap();
+        let sibling = absorbed.propose(vec![put(0xbb, 0)]).unwrap();
+        let grandchild = absorbed_child.propose(vec![put(0xaa, 0)]).unwrap();
+        absorbed.commit().unwrap();
+        absorbed_child.commit().unwrap();
+        grandchild.commit().unwrap();
+        assert!(matches!(
+            sibling.commit(),
+            Err(api::Error::ParentNotLatest { .. })
+        ));
+    });
+}
+
+/// The nodes a rebased child inherited belong to a revision that a commit in
+/// between has already replaced, so the rebase frees none of them.
+#[hash_mode]
+#[test]
+fn test_trivial_commit_child_rebased_over_a_sibling<H: HashMode>() {
+    assert_leaks_like::<H>(&[put(0xbb, 0), put(0xaa, 0)], |db| {
+        let absorbed = db.propose(Vec::<Op>::new()).unwrap();
+        let child = absorbed.propose(vec![put(0xaa, 0)]).unwrap();
+        let sibling = db.propose(vec![put(0xbb, 0)]).unwrap();
+        absorbed.commit().unwrap();
+        sibling.commit().unwrap();
+        child.commit_with_rebase().unwrap();
+    });
 }
