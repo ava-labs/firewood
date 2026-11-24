@@ -1976,20 +1976,15 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         // Create a difference iterator between the two tries with the given start
         // key and end key.
-        let iter_stop_key: Key = end_key.unwrap_or_default().into();
         let mut iter = DiffMerkleNodeStream::new(
             source_trie,
             self.nodestore(),
             start_key.unwrap_or_default().into(),
         )?
         .map_while(|op| match op {
-            Ok(op) => {
-                if iter_stop_key.is_empty() || op.key() <= &iter_stop_key {
-                    Some(Ok(op))
-                } else {
-                    None
-                }
-            }
+            Ok(op) => end_key
+                .is_none_or(|end| **op.key() <= *end)
+                .then_some(Ok(op)),
             Err(e) => Some(Err(e)),
         });
 
