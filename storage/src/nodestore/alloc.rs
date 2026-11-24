@@ -639,16 +639,16 @@ impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
 impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
     /// Truncates a free list at the given parent location.
     ///
-    /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
+    /// A free-list head lives in `header`, so truncating one flushes `header` to storage.
     pub(crate) fn truncate_free_list(
         &self,
-        free_lists: &mut FreeLists,
+        header: &mut NodeStoreHeader,
         free_list_parent: FreeListParent,
     ) -> Result<(), FileIoError> {
         match free_list_parent {
             FreeListParent::FreeListHead(area_size_index) => {
-                free_lists[area_size_index] = None;
-                Ok(())
+                header.free_lists_mut()[area_size_index] = None;
+                header.flush_to(self.storage.as_ref())
             }
             FreeListParent::PrevFreeArea {
                 area_size_idx,
