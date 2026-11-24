@@ -904,19 +904,17 @@ impl<H: HashMode> Proposal<'_, H> {
                     empty_parent = nodestore.empty_committed_sibling();
                     &empty_parent
                 };
-            let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
-            let mut batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
-                diff.collect::<Result<_, _>>()?;
-            if H::ALGORITHM.is_ethereum() {
-                let old_parent = Merkle::from(old_parent_ref);
-                let mut keep = Vec::with_capacity(batch_ops.len());
-                for op in batch_ops {
-                    if !changes_only_storage_root(&old_parent, &op)? {
-                        keep.push(op);
-                    }
-                }
-                batch_ops = keep;
-            }
+            let old_parent = Merkle::from(old_parent_ref);
+            let batch_ops = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?
+                .filter_map(|op| {
+                    op.and_then(|op| {
+                        let drop = H::ALGORITHM.is_ethereum()
+                            && changes_only_storage_root(&old_parent, &op)?;
+                        Ok((!drop).then_some(op))
+                    })
+                    .transpose()
+                })
+                .collect::<Result<Vec<_>, FileIoError>>()?;
 
             let new_proposal = db.propose_with_parent(batch_ops, &**current)?;
             nodestore = new_proposal.nodestore;
