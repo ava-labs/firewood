@@ -173,12 +173,16 @@ where
         .flat_map(proof_node_to_mpt_rlp)
         .collect();
 
-    // Inclusion: terminal node sits at account depth and carries a value.
-    // Anything else is exclusion (terminal is a strict ancestor, or
-    // a depth-64 branch with no account value).
-    let account_terminal = account_nodes
-        .last()
-        .filter(|n| n.key.as_ref().len() == ACCOUNT_DEPTH_NIBBLES && n.value_digest.is_some());
+    // The account is included only when the terminal node sits at account
+    // depth, carries a value and has the requested key. A strict ancestor, a
+    // depth-64 branch with no account value, or the leaf of another account
+    // whose key shares a prefix with the requested one all mean the account
+    // is absent.
+    let account_terminal = account_nodes.last().filter(|n| {
+        n.key.as_ref().len() == ACCOUNT_DEPTH_NIBBLES
+            && nibbles_match_packed(n.key.as_ref(), account_key)
+            && n.value_digest.is_some()
+    });
 
     let fields = account_terminal
         .and_then(|n| n.value_digest.as_ref().and_then(ValueDigest::value))
@@ -732,6 +736,53 @@ mod tests {
         assert!(
             recovered.is_none(),
             "exclusion proof should not yield a value, got {recovered:?}"
+        );
+    }
+
+    /// The path to an absent account can end at a different account's leaf,
+    /// when the two keys share a prefix and then diverge inside that leaf's
+    /// partial path. `eth_get_proof` must still report the requested account
+    /// as absent, as go-ethereum does.
+    #[test]
+    fn absent_account_whose_path_ends_at_another_accounts_leaf() {
+        let acc1 = [0x10u8; 32];
+        let acc2 = [0x20u8; 32];
+        let slot = [0xaau8; 32];
+        // Same first nibble as acc1, so the walk descends into acc1's leaf.
+        let missing = [0x11u8; 32];
+        let v1 = account_rlp(1, &[0x05]);
+        let v2 = account_rlp(2, &[]);
+        let merkle = init_merkle([
+            (acc1.to_vec(), v1.to_vec()),
+            ([acc1, slot].concat(), b"stored-value".to_vec()),
+            (acc2.to_vec(), v2.to_vec()),
+        ]);
+
+        let proof = eth_get_proof(merkle.nodestore(), &missing, &[slot]).unwrap();
+        let root: [u8; 32] = merkle
+            .nodestore()
+            .root_hash()
+            .unwrap()
+            .as_ref()
+            .try_into()
+            .unwrap();
+        assert!(
+            mpt_proof_value(&proof.account_proof, &root, &missing).is_none(),
+            "the proof bytes prove absence"
+        );
+        assert_eq!(proof.nonce, 0, "absent account reports nonce 0");
+        assert_eq!(proof.balance, [0u8; 32], "absent account reports balance 0");
+        assert_eq!(
+            proof.storage_hash,
+            keccak(NULL_RLP),
+            "absent account has the empty storage root"
+        );
+        assert!(
+            proof
+                .storage_proofs
+                .iter()
+                .all(|p| p.value.is_none() && p.proof.is_empty()),
+            "absent account has no storage proofs"
         );
     }
 
