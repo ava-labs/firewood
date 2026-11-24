@@ -59,7 +59,9 @@ use crate::manager::RevisionManagerConfig;
 use crate::merkle::Merkle;
 use crate::merkle::Value;
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::merkle::reconcile::account_values_equal_except_storage_root;
 use crate::merkle::verify_change_proof_root_hash;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::verify_change_proof_structure;
 
 #[derive(Error, Debug)]
@@ -822,28 +824,28 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
     }
 }
 
-/// Under the Ethereum scheme the hasher writes each account's storage root
-/// into its stored value, so a proposal that only touched an account's storage
-/// diffs against its old parent as a `Put` of the whole account. Replaying that
-/// `Put` on a newer revision would restore the old parent's nonce, balance and
-/// code hash. Such a `Put` is dropped when the newer revision still holds the
-/// account, since rehashing recomputes the storage root anyway.
-fn only_storage_root_changed<A: TrieReader, B: TrieReader>(
-    old: &Merkle<A>,
-    current: &Merkle<B>,
-    op: &BatchOp<crate::merkle::Key, crate::merkle::Value>,
+/// Length in bytes of an Ethereum account key.
+const ACCOUNT_KEY_BYTES: usize = ACCOUNT_DEPTH_NIBBLES / 2;
+
+/// Returns `true` when `op` puts an account whose only difference from
+/// `old_parent` is the storage root.
+///
+/// The Ethereum hasher derives that field from the account's storage and writes
+/// it into the stored value, so such a `Put` in a rebuilt batch means the
+/// proposal changed the account's storage and not the account.
+fn changes_only_storage_root<T: TrieReader>(
+    old_parent: &Merkle<T>,
+    op: &BatchOp<crate::merkle::Key, Value>,
 ) -> Result<bool, FileIoError> {
     let BatchOp::Put { key, value } = op else {
         return Ok(false);
     };
-    if key.len() != 32 || current.get_value(key)?.is_none() {
+    if key.len() != ACCOUNT_KEY_BYTES {
         return Ok(false);
     }
-    let Some(old_value) = old.get_value(key)? else {
-        return Ok(false);
-    };
-    let masked = |v: &[u8]| firewood_storage::replace_list_field(v, 2, &[0u8; 32]).ok();
-    Ok(masked(value).is_some_and(|new| Some(new) == masked(&old_value)))
+    Ok(old_parent
+        .get_value(key)?
+        .is_some_and(|old| account_values_equal_except_storage_root(value, &old)))
 }
 
 impl<H: HashMode> Proposal<'_, H> {
@@ -854,6 +856,13 @@ impl<H: HashMode> Proposal<'_, H> {
     /// parent matches the current revision, and if not, diffs the proposal
     /// against its original parent to reconstruct the batch ops, re-proposes
     /// them against the current revision, and commits the new proposal.
+    ///
+    /// Under the Ethereum hash scheme, a reconstructed `Put` that changes nothing
+    /// in an account but its storage root is dropped instead of re-proposed,
+    /// because hashing derives that field from the account's storage. A `Put` in
+    /// the original batch that leaves an account's fields as they were in the
+    /// original parent does not survive the rebase, although replaying that batch
+    /// would apply it.
     ///
     /// The write lock is held throughout to prevent other commits from
     /// interleaving between the rebase and commit.
@@ -899,11 +908,10 @@ impl<H: HashMode> Proposal<'_, H> {
             let mut batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
                 diff.collect::<Result<_, _>>()?;
             if H::ALGORITHM.is_ethereum() {
-                let old = Merkle::from(old_parent_ref);
-                let current = Merkle::from(&**current);
+                let old_parent = Merkle::from(old_parent_ref);
                 let mut keep = Vec::with_capacity(batch_ops.len());
                 for op in batch_ops {
-                    if !only_storage_root_changed(&old, &current, &op)? {
+                    if !changes_only_storage_root(&old_parent, &op)? {
                         keep.push(op);
                     }
                 }
