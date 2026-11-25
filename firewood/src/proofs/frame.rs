@@ -16,11 +16,12 @@ use super::reader::ReadError;
 use super::types::ProofError;
 
 /// Hard cap on a decoded proof body, enforced by the decoder before
-/// allocating and by the serializer before emitting. 6MiB bounds what one
-/// message can force us to allocate while leaving room for a full
+/// allocating and by the serializer before emitting. 6MiB bounds the body one
+/// message can force us to allocate, while leaving room for a full
 /// state-sync message (target 2MiB). Changing it needs
 /// coordination: every decoder must accept a value before any producer
-/// emits it.
+/// emits it. The decoder's item limits bound how many items it reads from that
+/// body (see [`crate::api::MAX_PROOF_ITEMS`]).
 pub(crate) const MAX_DECOMPRESSED_LEN: usize = 6 * 1024 * 1024; // 6 MiB
 
 /// Cap on the uncompressed/compressed length ratio, bounding zstd-bomb

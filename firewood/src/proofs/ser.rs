@@ -89,7 +89,10 @@ impl FrozenRangeProof {
     /// Variable-length integers are encoded using unsigned LEB128.
     ///
     /// Readers reject a key longer than 1024 bytes and a proof-node key longer
-    /// than 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`].
+    /// than 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`]. They also reject a
+    /// start or end proof with more nodes than a valid one can hold, and a
+    /// range or change proof with more than [`crate::api::MAX_PROOF_ITEMS`]
+    /// key-value pairs or batch operations.
     ///
     /// # Errors
     ///

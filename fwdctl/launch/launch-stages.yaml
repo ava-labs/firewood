@@ -1,3 +1,4 @@
+
 # Launch Stages Configuration
 
 packages:
@@ -72,12 +73,12 @@ stages:
     name: "Installing Rust"
     commands:
       - "install -d -m 0755 -o ubuntu -g ubuntu /usr/local/rust"
-      - "sudo -u ubuntu --login env RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust bash /tmp/firewood/benchmark/setup-scripts/install-rust.sh"
+      - "sudo -u ubuntu --login env RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust bash /tmp/firewood/fwdctl/launch/setup-scripts/install-rust.sh"
   # permission fixes + symlink setup
   setup-environment:
     name: "Setting up environment"
     commands:
-      - "bash /tmp/firewood/benchmark/setup-scripts/build-environment.sh"
+      - "bash /tmp/firewood/fwdctl/launch/setup-scripts/build-environment.sh"
       - "bash -c 'mkdir ~ubuntu/firewood; mv /tmp/firewood/{.[!.],}* ~ubuntu/firewood/'"
       - "chown -R ubuntu:users {{ variables.nvme_base }}/ubuntu"
       - "chmod -R g=u {{ variables.nvme_base }}/ubuntu"
@@ -88,8 +89,8 @@ stages:
   install-go-grafana:
     name: "Installing Go and Grafana"
     commands:
-      - "bash {{ variables.nvme_base }}/ubuntu/firewood/benchmark/setup-scripts/install-golang.sh"
-      - "bash {{ variables.nvme_base }}/ubuntu/firewood/benchmark/setup-scripts/install-grafana.sh"
+      - "bash {{ variables.nvme_base }}/ubuntu/firewood/fwdctl/launch/setup-scripts/install-golang.sh"
+      - "bash {{ variables.nvme_base }}/ubuntu/firewood/fwdctl/launch/setup-scripts/install-grafana.sh"
   # install task + clone avalanchego/libevm
   clone-repos:
     name: "Cloning repositories"
