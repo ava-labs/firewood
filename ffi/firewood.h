@@ -728,8 +728,9 @@ typedef struct CreateChangeProofArgs {
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, there is no count limit. The proof can stop earlier at
-   * [`firewood::api::PROOF_GENERATION_BUDGET`].
+   * `0`, the caller sets no count limit. The proof can stop earlier at
+   * [`firewood::api::PROOF_GENERATION_BUDGET`] bytes or
+   * [`firewood::api::MAX_PROOF_ITEMS`] entries.
    */
   uint32_t max_length;
 } CreateChangeProofArgs;
@@ -826,8 +827,9 @@ typedef struct CreateRangeProofArgs {
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, there is no count limit. The proof can stop earlier at
-   * [`firewood::api::PROOF_GENERATION_BUDGET`].
+   * `0`, the caller sets no count limit. The proof can stop earlier at
+   * [`firewood::api::PROOF_GENERATION_BUDGET`] bytes or
+   * [`firewood::api::MAX_PROOF_ITEMS`] entries.
    */
   uint32_t max_length;
 } CreateRangeProofArgs;
@@ -2964,7 +2966,7 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] containing an error message if serialization panicked.
+ * - [`ValueResult::Err`] containing an error message if serialization failed.
  */
 struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proof);
 

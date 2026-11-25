@@ -19,6 +19,7 @@ use super::Value;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenProof;
 use crate::api::FrozenRangeProof;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::api::{self};
 use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
@@ -120,9 +121,9 @@ pub(super) struct SizedProof<P> {
 
 impl<T: TrieReader> Merkle<T> {
     /// Generates a range proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
-    /// the last emitted key and pass the returned [`SizedProof::hint`] as the
-    /// next request's `hint`.
+    /// approaches, and never exceeds, `budget` bytes. It stops sooner at
+    /// [`MAX_PROOF_ITEMS`] items. Resume strictly above the last emitted key
+    /// and pass the returned [`SizedProof::hint`] as the next request's `hint`.
     ///
     /// # Errors
     ///
@@ -173,9 +174,9 @@ impl<T: TrieReader> Merkle<T> {
 
 impl<T: HashedNodeReader> Merkle<T> {
     /// Generates a change proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
-    /// the last emitted key and pass the returned [`SizedProof::hint`] as the
-    /// next request's `hint`.
+    /// approaches, and never exceeds, `budget` bytes. It stops sooner at
+    /// [`MAX_PROOF_ITEMS`] items. Resume strictly above the last emitted key
+    /// and pass the returned [`SizedProof::hint`] as the next request's `hint`.
     ///
     /// # Errors
     ///
@@ -236,7 +237,8 @@ impl<T: HashedNodeReader> Merkle<T> {
 /// 2. Build and serialize the candidate. Use its measured ratio and edge
 ///    bytes for the next pass and as the hint for the next chunk.
 /// 3. Stop if the wire size reaches 97% of the budget, we run out of
-///    items, or the decoder's body limit leaves no room for another item.
+///    items, the decoder's body limit leaves no room for another item, or
+///    the chunk holds [`MAX_PROOF_ITEMS`] items.
 /// 4. If the wire size is under 97%, grow using the updated estimate.
 /// 5. If the wire size or body exceeds its limit, estimate the excess in
 ///    body bytes and drop tail items until their costs cover it. A shrunk
@@ -290,7 +292,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
                 .saturating_sub(edges);
             let end = grow_prefix::<B>(&mut items, &mut kept, &mut costs, allowance)?;
             if kept.len() == count && pass > 0 {
-                // The estimate admits nothing more: the last probe stands.
+                // Nothing more fits: the last probe stands.
                 break;
             }
             natural_end = end;
@@ -536,16 +538,18 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
     }
 }
 
-/// Admits items while their summed cost stays within `allowance`, always
-/// admitting one when `kept` is empty so paging progresses. Returns whether
-/// the stream is then exhausted.
+/// Admits items while their summed cost stays within `allowance` and `kept`
+/// holds fewer than [`MAX_PROOF_ITEMS`], always admitting one when `kept` is
+/// empty so paging progresses. Returns whether the stream is then exhausted.
 fn grow_prefix<B: ChunkBuilder>(
     items: &mut std::iter::Peekable<impl Iterator<Item = Result<B::Item, api::Error>>>,
     kept: &mut Vec<B::Item>,
     costs: &mut Vec<usize>,
     allowance: usize,
 ) -> Result<bool, api::Error> {
-    while let Some(peeked) = items.peek() {
+    while kept.len() < MAX_PROOF_ITEMS
+        && let Some(peeked) = items.peek()
+    {
         let cost = if let Ok(item) = peeked {
             B::item_cost(item)
         } else {

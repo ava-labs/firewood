@@ -54,7 +54,8 @@
 //! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
 //!
 //! Readers reject keys longer than 1024 bytes and proof-node keys longer than
-//! 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`].
+//! 2048 nibbles. See [`crate::api::MAX_KEY_BYTES`]. They also reject a proof
+//! with too many nodes or items. See [`crate::api::MAX_PROOF_ITEMS`].
 //!
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.

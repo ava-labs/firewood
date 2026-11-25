@@ -75,6 +75,7 @@ use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
 use crate::api::KeyType;
 use crate::api::KeyValuePair;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::api::PROOF_GENERATION_BUDGET;
 use crate::api::ValueType;
 use crate::api::{self};
@@ -1626,15 +1627,18 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
 }
 
 /// Takes up to `limit` items from `iter`, stopping before the item that would
-/// take their total `size` past `budget`. It always takes the first item and
-/// leaves the rest in `iter`. If it reaches an error, it returns that error.
+/// take their total `size` past `budget`. It never takes more than
+/// [`MAX_PROOF_ITEMS`]. It always takes the first item and leaves the rest in
+/// `iter`. If it reaches an error, it returns that error.
 fn collect_within_budget<T, E>(
     iter: &mut Peekable<impl Iterator<Item = Result<T, E>>>,
     limit: Option<NonZeroUsize>,
     budget: usize,
     size: impl Fn(&T) -> usize,
 ) -> Result<Box<[T]>, E> {
-    let max_items = limit.map_or(usize::MAX, NonZeroUsize::get);
+    let max_items = limit
+        .map_or(usize::MAX, NonZeroUsize::get)
+        .min(MAX_PROOF_ITEMS);
     let mut items = Vec::new();
     let mut bytes = 0usize;
     while items.len() < max_items
@@ -1744,8 +1748,9 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// * `limit` - Optional maximum number of key-value pairs to include in the proof.
     ///   - If `Some(n)`, at most n key-value pairs will be included
-    ///   - If `None`, there is no count limit
-    ///   - The proof can stop earlier at [`PROOF_GENERATION_BUDGET`]
+    ///   - If `None`, the caller sets no count limit
+    ///   - The proof can stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or
+    ///     [`MAX_PROOF_ITEMS`] pairs
     ///   - Useful for paginating through large ranges
     ///
     /// # Returns
@@ -1753,8 +1758,8 @@ impl<T: TrieReader> Merkle<T> {
     /// A `FrozenRangeProof` containing:
     /// - Start proof: Merkle proof for the first key in the range
     /// - End proof: Merkle proof for the last key in the range
-    /// - Key-value pairs: All entries within the specified bounds (up to the limit
-    ///   or the byte budget)
+    /// - Key-value pairs: All entries within the specified bounds (up to the limit,
+    ///   the byte budget or [`MAX_PROOF_ITEMS`])
     ///
     /// # Errors
     ///
@@ -1968,7 +1973,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// Generate a change proof
     ///
     /// The proof holds at most `limit` batch operations and can stop earlier at
-    /// [`PROOF_GENERATION_BUDGET`].
+    /// [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`] operations.
     ///
     /// # Errors
     ///

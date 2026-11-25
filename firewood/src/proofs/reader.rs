@@ -22,6 +22,9 @@ pub(super) trait Version0: Sized {
     /// The minimum number of bytes required to deserialize a single instance of this type.
     const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
+    /// The most items of this type a sequence may hold, checked before reading.
+    const MAX_ITEMS: usize = usize::MAX;
+
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError>;
 }
 

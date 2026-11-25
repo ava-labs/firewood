@@ -210,6 +210,8 @@ pub enum ProofError {
         len: usize,
     },
 
+    /// The proof holds more items than `max_length` or
+    /// [`crate::api::MAX_PROOF_ITEMS`] allows.
     #[error("larger than max length")]
     ProofIsLargerThanMaxLength,
 

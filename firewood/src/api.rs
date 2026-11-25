@@ -75,6 +75,11 @@ pub const MAX_KEY_BYTES: usize = 1024;
 /// boundary proofs.
 pub const PROOF_GENERATION_BUDGET: usize = crate::proofs::MAX_DECOMPRESSED_LEN - 1024 * 1024;
 
+/// The most key-value pairs or batch operations a range or change proof may
+/// hold. Generation stops at this count, and serializing or decoding a proof
+/// with more fails. Changing it needs coordination across versions.
+pub const MAX_PROOF_ITEMS: usize = 1 << 16;
+
 /// Rejects a batch operation that no proposal path may apply: a key or prefix
 /// longer than [`MAX_KEY_BYTES`], or, under the Ethereum hash scheme, a `Put`
 /// with an empty value, which that scheme hashes the same as no value.
@@ -407,7 +412,8 @@ pub trait DbView {
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof. The proof can
-    ///   stop earlier at [`PROOF_GENERATION_BUDGET`].
+    ///   stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`]
+    ///   keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof<K: KeyType>(
         &self,
@@ -485,7 +491,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof. The proof can
-    ///   stop earlier at [`PROOF_GENERATION_BUDGET`].
+    ///   stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`]
+    ///   keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof(
         &self,

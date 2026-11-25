@@ -43,8 +43,9 @@ pub struct CreateRangeProofArgs<'a> {
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs to include in the proof. If the
     /// range contains more items than this, the proof will be truncated. If
-    /// `0`, there is no count limit. The proof can stop earlier at
-    /// [`firewood::api::PROOF_GENERATION_BUDGET`].
+    /// `0`, the caller sets no count limit. The proof can stop earlier at
+    /// [`firewood::api::PROOF_GENERATION_BUDGET`] bytes or
+    /// [`firewood::api::MAX_PROOF_ITEMS`] entries.
     pub max_length: u32,
 }
 
@@ -594,7 +595,7 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] containing an error message if serialization panicked.
+/// - [`ValueResult::Err`] containing an error message if serialization failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| -> Result<Option<Box<[u8]>>, api::Error> {
