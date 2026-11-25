@@ -63,6 +63,7 @@ ethereum-types.workspace = true
 firewood-storage = { workspace = true, features = ["test_utils"] }
 firewood-triehash.workspace = true
 insta.workspace = true
+metrics-collector-prometheus.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true
@@ -76,6 +77,11 @@ sha3 = "0.12.0"
 
 [[bench]]
 name = "hashops"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "state"
 harness = false
 required-features = ["test_utils"]
 

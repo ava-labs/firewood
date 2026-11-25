@@ -1809,6 +1809,7 @@ dependencies = [
  "insta",
  "integer-encoding",
  "lender",
+ "metrics-collector-prometheus",
  "nonzero_ext",
  "parking_lot 0.13.0",
  "plain_hasher",
