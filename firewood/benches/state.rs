@@ -72,6 +72,10 @@ const SWEEP_OPS: [usize; 5] = [16, 64, 256, 1024, 4096];
 /// Blocks committed in a loop while `during_commit` reads run.
 const BACKGROUND_BLOCKS: usize = 256;
 
+/// Proposals a propose benchmark makes between releases; see
+/// [`Run::releasing`].
+const RELEASE_EVERY: usize = 64;
+
 /// Node cache budget for the `cold` configuration. Reads are never cached, so
 /// this only holds what a commit writes.
 const COLD_CACHE_BYTES: usize = 1 << 20;
@@ -365,6 +369,28 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
+    /// Wraps an `iter_batched` setup so that every [`RELEASE_EVERY`]th call
+    /// first commits an empty proposal.
+    ///
+    /// The database keeps every proposal it hands out until a commit drops
+    /// the ones no caller still holds, so a benchmark that only proposes
+    /// would otherwise keep all of them. An empty proposal leaves the root
+    /// unchanged, so its commit adds no revision and persists nothing.
+    fn releasing<T>(&self, mut setup: impl FnMut() -> T) -> impl FnMut() -> T {
+        let mut calls = 0usize;
+        move || {
+            if calls.is_multiple_of(RELEASE_EVERY) {
+                self.db
+                    .propose(api::OwnedBatch::default())
+                    .expect("propose")
+                    .commit()
+                    .expect("commit");
+            }
+            calls = calls.wrapping_add(1);
+            setup()
+        }
+    }
+
     fn warm(&self, view: &dyn api::DynDbView) {
         let accounts = self.state.accounts.iter().map(<[u8; 32]>::as_slice);
         let slots = self.state.slots.iter().map(<[u8; 64]>::as_slice);
@@ -417,7 +443,7 @@ impl Run<'_> {
             group.throughput(Throughput::Elements(ops as u64));
             group.bench_function(format!("propose/{}/ops_{ops}", self.config.name()), |b| {
                 b.iter_batched(
-                    || self.state.block(self.rng, ops),
+                    self.releasing(|| self.state.block(self.rng, ops)),
                     |batch| self.db.propose(batch).expect("propose"),
                     BatchSize::SmallInput,
                 );
@@ -482,7 +508,7 @@ impl Run<'_> {
         group.throughput(Throughput::Elements(self.block_ops as u64));
         group.bench_function(format!("propose/{}", self.config.name()), |b| {
             b.iter_batched(
-                || self.block(),
+                self.releasing(|| self.block()),
                 |batch| self.db.propose(batch).expect("propose"),
                 BatchSize::SmallInput,
             );
@@ -495,12 +521,12 @@ impl Run<'_> {
         group.throughput(Throughput::Elements(self.block_ops as u64));
         group.bench_function("propose/on_proposal/hot", |b| {
             b.iter_batched(
-                || {
+                self.releasing(|| {
                     (
                         self.db.propose(self.block()).expect("propose"),
                         self.block(),
                     )
-                },
+                }),
                 |(parent, batch)| {
                     let child = parent.propose(batch).expect("propose");
                     (parent, child)
