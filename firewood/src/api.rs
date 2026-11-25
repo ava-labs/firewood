@@ -69,8 +69,9 @@ pub const MAX_KEY_BYTES: usize = 1024;
 
 /// Byte budget for the items in a generated range or change proof, counted as
 /// the proof body encodes them. Generation stops before the item that would
-/// exceed it, but always keeps the first item so paging makes progress. The
-/// remaining 1 MiB of the body cap (see [`ProofError::BodyTooLarge`]) holds the
+/// take the total past this budget. It always keeps the first item, so a
+/// caller that resumes after the last key in each proof makes progress. The
+/// rest of the body cap (see [`ProofError::BodyTooLarge`]) leaves room for the
 /// boundary proofs.
 pub const PROOF_GENERATION_BUDGET: usize = crate::proofs::MAX_DECOMPRESSED_LEN - 1024 * 1024;
 

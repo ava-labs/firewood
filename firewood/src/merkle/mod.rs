@@ -1625,8 +1625,9 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     Ok(())
 }
 
-/// Takes up to `limit` items from `iter` within `budget` bytes, leaving the
-/// rest in `iter`. See [`PROOF_GENERATION_BUDGET`].
+/// Takes up to `limit` items from `iter`, stopping before the item that would
+/// take their total `size` past `budget`. It always takes the first item and
+/// leaves the rest in `iter`. If it reaches an error, it returns that error.
 fn collect_within_budget<T, E>(
     iter: &mut Peekable<impl Iterator<Item = Result<T, E>>>,
     limit: Option<NonZeroUsize>,
@@ -1752,7 +1753,8 @@ impl<T: TrieReader> Merkle<T> {
     /// A `FrozenRangeProof` containing:
     /// - Start proof: Merkle proof for the first key in the range
     /// - End proof: Merkle proof for the last key in the range
-    /// - Key-value pairs: All entries within the specified bounds (up to the limit)
+    /// - Key-value pairs: All entries within the specified bounds (up to the limit
+    ///   or the byte budget)
     ///
     /// # Errors
     ///
