@@ -75,6 +75,7 @@ use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
 use crate::api::KeyType;
 use crate::api::KeyValuePair;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::api::PROOF_GENERATION_BUDGET;
 use crate::api::ValueType;
 use crate::api::{self};
@@ -1625,19 +1626,21 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     Ok(())
 }
 
-/// Collects items from `iter` until there are `limit` of them, the next item
-/// would take their total `size` past `budget` bytes, or `iter` ends. An item it
-/// does not take stays in `iter`. It always takes the first item, so a caller
-/// paging through a range makes progress even when one item is larger than the
-/// budget. If `iter` yields an error among the items it takes, it returns that
-/// error.
+/// Collects items from `iter` until there are `limit` or [`MAX_PROOF_ITEMS`] of
+/// them, the next item would take their total `size` past `budget` bytes, or
+/// `iter` ends. An item it does not take stays in `iter`. It always takes the
+/// first item, so a caller paging through a range makes progress even when one
+/// item is larger than the budget. If `iter` yields an error among the items it
+/// takes, it returns that error.
 fn collect_within_budget<T, E>(
     iter: &mut Peekable<impl Iterator<Item = Result<T, E>>>,
     limit: Option<NonZeroUsize>,
     budget: usize,
     size: impl Fn(&T) -> usize,
 ) -> Result<Box<[T]>, E> {
-    let max_items = limit.map_or(usize::MAX, NonZeroUsize::get);
+    let max_items = limit
+        .map_or(usize::MAX, NonZeroUsize::get)
+        .min(MAX_PROOF_ITEMS);
     let mut items = Vec::new();
     let mut bytes = 0usize;
     while items.len() < max_items {
@@ -1751,9 +1754,9 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// * `limit` - Optional maximum number of key-value pairs to include in the proof.
     ///   - If `Some(n)`, at most n key-value pairs will be included
-    ///   - If `None`, there is no count limit
+    ///   - If `None`, the caller sets no count limit
     ///   - The proof may hold fewer pairs, because generation also stops at
-    ///     [`PROOF_GENERATION_BUDGET`].
+    ///     [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`] pairs.
     ///   - Useful for paginating through large ranges
     ///
     /// # Returns
@@ -1761,8 +1764,8 @@ impl<T: TrieReader> Merkle<T> {
     /// A `FrozenRangeProof` containing:
     /// - Start proof: Merkle proof for the first key in the range
     /// - End proof: Merkle proof for the last key in the range
-    /// - Key-value pairs: All entries within the specified bounds (up to the limit
-    ///   or the byte budget)
+    /// - Key-value pairs: All entries within the specified bounds (up to the limit,
+    ///   the byte budget or [`MAX_PROOF_ITEMS`])
     ///
     /// # Errors
     ///
@@ -1828,8 +1831,9 @@ impl<T: TrieReader> Merkle<T> {
         }
 
         let end_proof = if iter.next().transpose()?.is_some() {
-            // collection stopped at the limit or the byte budget and there is at
-            // least one more key, so the end proof is for the last key provided
+            // collection stopped at the limit, the byte budget or MAX_PROOF_ITEMS
+            // and there is at least one more key, so the end proof is for the last
+            // key provided
             key_values.last().map(|(largest_key, _)| &**largest_key)
         } else {
             // every key in the range was collected, so the end proof is for the
@@ -1980,7 +1984,8 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// Generate a change proof
     ///
     /// The proof holds at most `limit` batch operations. Whatever the limit,
-    /// generation also stops at [`PROOF_GENERATION_BUDGET`].
+    /// generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
+    /// [`MAX_PROOF_ITEMS`] operations.
     ///
     /// # Errors
     ///
@@ -2062,11 +2067,12 @@ impl<T: HashedNodeReader> Merkle<T> {
         .peekable();
 
         // Create an array of `BatchOp`s representing the difference between the two
-        // revisions. The size of the array is bounded by `limit` and by the
-        // byte budget.
+        // revisions. The size of the array is bounded by `limit`, by the byte
+        // budget and by MAX_PROOF_ITEMS.
         let batch_ops = collect_within_budget(&mut iter, limit, budget, batch_op_encoded_len)?;
 
-        // Check whether the limit or the byte budget cut off remaining items.
+        // Check whether the limit, the byte budget or MAX_PROOF_ITEMS cut off
+        // remaining items.
         let truncated = iter.next().transpose()?.is_some();
 
         // When collection was cut off, the end proof is for the last key in

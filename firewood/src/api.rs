@@ -81,10 +81,13 @@ pub const PROOF_GENERATION_BUDGET: usize = crate::proofs::MAX_DECOMPRESSED_LEN -
 
 /// The most key-value pairs or batch operations a serialized range or change
 /// proof may carry. [`FrozenRangeProof::from_slice`] and
-/// [`FrozenChangeProof::from_slice`] reject a proof with more. The cap on a
-/// proof's body size does not bound how many items it holds, because an item
-/// can take as little as two bytes on the wire. Changing it needs coordination,
-/// because no producer may emit more items than deployed decoders accept.
+/// [`FrozenChangeProof::from_slice`] reject a proof with more.
+/// [`FrozenRangeProof::write_to_vec`] and [`FrozenChangeProof::write_to_vec`]
+/// refuse to serialize one. Range and change proof generation stops at this
+/// many items. The cap on a proof's body size does not bound how many items it
+/// holds, because an item can take as little as two bytes on the wire. Changing
+/// it needs coordination, because no producer may emit more items than deployed
+/// decoders accept.
 pub const MAX_PROOF_ITEMS: usize = 1 << 16;
 
 /// Rejects a batch operation that no proposal path may apply: a key or prefix
@@ -419,7 +422,8 @@ pub trait DbView {
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof. Whatever the
-    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`].
+    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
+    ///   [`MAX_PROOF_ITEMS`] keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof<K: KeyType>(
         &self,
@@ -497,7 +501,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof. Whatever the
-    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`].
+    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
+    ///   [`MAX_PROOF_ITEMS`] keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof(
         &self,

@@ -580,7 +580,7 @@ impl<H: HashMode> Db<H> {
     /// Returns the proof that covers key-value changes between `start_hash` and
     /// `end_hash` within the optional `[start_key, end_key]` range, truncated to
     /// at most `limit` entries. Whatever the limit, generation also stops at
-    /// [`api::PROOF_GENERATION_BUDGET`].
+    /// [`api::PROOF_GENERATION_BUDGET`] bytes or [`api::MAX_PROOF_ITEMS`] entries.
     ///
     /// # Errors
     ///

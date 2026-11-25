@@ -1172,3 +1172,48 @@ fn test_collect_within_budget_returns_the_first_error() {
     let result = collect_within_budget(&mut iter, None, 100, |&n| n);
     assert_eq!(result.map(|kept| kept.len()), Err("first"));
 }
+
+/// [`collect_within_budget`] stops at [`MAX_PROOF_ITEMS`] items when the limit
+/// and the budget would admit more. With exactly that many items, it takes them
+/// all.
+#[test_case(MAX_PROOF_ITEMS + 1, None => (MAX_PROOF_ITEMS, Some(0)) ; "no limit")]
+#[test_case(MAX_PROOF_ITEMS + 1, Some(MAX_PROOF_ITEMS + 1) => (MAX_PROOF_ITEMS, Some(0)) ; "limit above MAX_PROOF_ITEMS")]
+#[test_case(MAX_PROOF_ITEMS, None => (MAX_PROOF_ITEMS, None) ; "exactly MAX_PROOF_ITEMS items")]
+fn test_collect_within_budget_stops_at_max_proof_items(
+    items: usize,
+    limit: Option<usize>,
+) -> (usize, Option<usize>) {
+    collect_sizes(&vec![0; items], limit, usize::MAX)
+}
+
+/// With no limit, range and change proofs over more than [`MAX_PROOF_ITEMS`]
+/// small items stop at [`MAX_PROOF_ITEMS`] items, although more would fit the
+/// byte budget. Each proof serializes, decodes and verifies.
+#[hash_mode]
+#[test]
+fn test_proof_generation_stops_at_max_proof_items<H: HashMode>() {
+    use crate::proofs::verify_change_proof_structure;
+    use crate::proofs::verify_range_proof_structure;
+
+    let count = u32::try_from(MAX_PROOF_ITEMS + 1).unwrap();
+    let target = init_merkle::<H, _, _, _>((0..count).map(|i| (i.to_be_bytes(), [1u8])));
+    let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+    let root_hash = target.nodestore().root_hash().unwrap();
+
+    let range = target.range_proof(None, None, None).unwrap();
+    assert_eq!(range.key_values().len(), MAX_PROOF_ITEMS);
+    let mut wire = Vec::new();
+    range.write_to_vec(&mut wire).unwrap();
+    let decoded = FrozenRangeProof::from_slice(&wire).unwrap();
+    verify_range_proof_structure(&decoded, root_hash.clone(), None, None, H::ALGORITHM, None)
+        .unwrap();
+
+    let change = target
+        .change_proof(None, None, source.nodestore(), None)
+        .unwrap();
+    assert_eq!(change.batch_ops().len(), MAX_PROOF_ITEMS);
+    let mut wire = Vec::new();
+    change.write_to_vec(&mut wire).unwrap();
+    let decoded = FrozenChangeProof::from_slice(&wire).unwrap();
+    verify_change_proof_structure(&decoded, root_hash, None, None, H::ALGORITHM, None).unwrap();
+}

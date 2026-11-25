@@ -29,6 +29,7 @@ use test_case::test_case;
 use super::init_merkle;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::api::{self};
 use crate::db::BatchOp;
 use crate::merkle::Key;
@@ -229,6 +230,28 @@ fn test_sized_constant_values_stay_decodable<H: HashMode>() {
     let change = target
         .change_proof_sized(source.nodestore(), None, usize::MAX, None)
         .unwrap();
+    assert!(!change.natural_end);
+    verify_change_chunk(&target, &source, None, &change);
+}
+
+/// Items so small that more than [`MAX_PROOF_ITEMS`] fit the body limit: a
+/// chunk stops at [`MAX_PROOF_ITEMS`] items, and decoders accept it.
+#[hash_mode]
+#[test]
+fn test_sized_chunk_stops_at_max_proof_items<H: HashMode>() {
+    let count = u32::try_from(MAX_PROOF_ITEMS + 1).unwrap();
+    let target = init_merkle::<H, _, _, _>((0..count).map(|i| (i.to_be_bytes(), [1u8])));
+    let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+
+    let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
+    assert_eq!(range.proof.key_values().len(), MAX_PROOF_ITEMS);
+    assert!(!range.natural_end);
+    verify_range_chunk(&target, None, &range);
+
+    let change = target
+        .change_proof_sized(source.nodestore(), None, usize::MAX, None)
+        .unwrap();
+    assert_eq!(change.proof.batch_ops().len(), MAX_PROOF_ITEMS);
     assert!(!change.natural_end);
     verify_change_chunk(&target, &source, None, &change);
 }

@@ -2100,8 +2100,13 @@ fn test_proof_item_count_bound<H: HashMode>(count: usize, accepted: bool) {
             .collect(),
         H::ALGORITHM,
     );
+    // Frame the body directly, because `write_to_vec` refuses a proof over the
+    // bound.
+    let mut body = Vec::new();
+    range.write_body_to_vec(&mut body);
     let mut data = Vec::new();
-    range.write_to_vec(&mut data).expect("serialize proof");
+    super::ser::write_framed_body(&body, ProofType::Range, H::ALGORITHM, &mut data)
+        .expect("frame proof");
     assert_bound_outcome(
         FrozenRangeProof::from_slice(&data),
         accepted,
@@ -2119,14 +2124,62 @@ fn test_proof_item_count_bound<H: HashMode>(count: usize, accepted: bool) {
             .collect(),
         H::ALGORITHM,
     );
+    let mut body = Vec::new();
+    change.write_body_to_vec(&mut body);
     let mut data = Vec::new();
-    change.write_to_vec(&mut data).expect("serialize proof");
+    super::ser::write_framed_body(&body, ProofType::Change, H::ALGORITHM, &mut data)
+        .expect("frame proof");
     assert_bound_outcome(
         FrozenChangeProof::from_slice(&data),
         accepted,
         "array length",
         COUNT_BOUND_MESSAGE,
     );
+}
+
+/// `write_to_vec` serializes a proof with [`MAX_PROOF_ITEMS`] key-value pairs
+/// or batch operations, and refuses one with more, which decoders would reject.
+/// It leaves `out` untouched when it refuses.
+#[test_case(MAX_PROOF_ITEMS, true ; "at the bound")]
+#[test_case(MAX_PROOF_ITEMS + 1, false ; "one item over")]
+fn test_write_to_vec_item_count_bound(count: usize, accepted: bool) {
+    fn check(result: Result<(), ProofError>, out: &[u8], accepted: bool) {
+        if accepted {
+            result.expect("serialize proof");
+        } else {
+            assert!(
+                matches!(result, Err(ProofError::ProofIsLargerThanMaxLength)),
+                "{result:?}"
+            );
+            assert_eq!(out, [0xaa], "out must be untouched");
+        }
+    }
+
+    let range = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        (0..count)
+            .map(|_| (Box::<[u8]>::from([]), Box::<[u8]>::from([])))
+            .collect(),
+        NodeHashAlgorithm::MerkleDB,
+    );
+    let mut out = vec![0xaa];
+    let result = range.write_to_vec(&mut out);
+    check(result, &out, accepted);
+
+    let change = FrozenChangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        (0..count)
+            .map(|_| BatchOp::Delete {
+                key: Box::<[u8]>::from([]),
+            })
+            .collect(),
+        NodeHashAlgorithm::MerkleDB,
+    );
+    let mut out = vec![0xaa];
+    let result = change.write_to_vec(&mut out);
+    check(result, &out, accepted);
 }
 
 /// The count is checked before any item is read, which is what keeps a decoded

@@ -20,6 +20,7 @@ use super::types::ProofNode;
 use super::types::ProofType;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
+use crate::api::MAX_PROOF_ITEMS;
 use crate::db::BatchOp;
 use crate::merkle::Key;
 use crate::merkle::Value;
@@ -96,10 +97,13 @@ impl FrozenRangeProof {
     ///
     /// # Errors
     ///
+    /// Returns [`ProofError::ProofIsLargerThanMaxLength`] if the proof holds
+    /// more than [`crate::api::MAX_PROOF_ITEMS`] key-value pairs.
     /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
     /// the size cap or [`ProofError::Compression`] if the compression
-    /// fails; `out` is untouched on error.
+    /// fails. `out` is untouched on error.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        check_item_count(self.key_values().len())?;
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
         write_framed_body(&body, ProofType::Range, self.hash_mode(), out)
@@ -128,8 +132,10 @@ impl FrozenChangeProof {
     ///
     /// # Errors
     ///
-    /// Errors as [`FrozenRangeProof::write_to_vec`].
+    /// Errors as [`FrozenRangeProof::write_to_vec`], with batch operations in
+    /// place of key-value pairs.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        check_item_count(self.batch_ops().len())?;
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
         write_framed_body(&body, ProofType::Change, self.hash_mode(), out)
@@ -164,6 +170,15 @@ pub(crate) fn write_framed_body(
         out.truncate(start);
     }
     result
+}
+
+/// Rejects a proof with more key-value pairs or batch operations than decoders
+/// accept.
+const fn check_item_count(count: usize) -> Result<(), ProofError> {
+    if count > MAX_PROOF_ITEMS {
+        return Err(ProofError::ProofIsLargerThanMaxLength);
+    }
+    Ok(())
 }
 
 /// Rejects a canonical body larger than the cap decoders enforce.

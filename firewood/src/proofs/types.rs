@@ -210,6 +210,9 @@ pub enum ProofError {
         len: usize,
     },
 
+    /// The proof holds more key-value pairs or batch operations than allowed.
+    /// Verification returns it for more than the caller's `max_length`.
+    /// Serialization returns it for more than [`crate::api::MAX_PROOF_ITEMS`].
     #[error("larger than max length")]
     ProofIsLargerThanMaxLength,
 
