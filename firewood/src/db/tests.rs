@@ -3,6 +3,7 @@
 
 mod concurrent_rebase;
 mod merge;
+mod rebase_account;
 
 use super::test::TestDb;
 
