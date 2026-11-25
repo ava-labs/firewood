@@ -138,11 +138,10 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 /// call it anywhere that does not recompute `storageRoot`, or it would treat two
 /// different accounts as equal.
 ///
-/// Logs a warning when either side fails to parse as account RLP. The
-/// resulting `false` return falls through to `on_conflict`, which surfaces
-/// the conflict as `UnexpectedValue`. The warning gives operators a clearer
-/// signal that the underlying cause is malformed data, not a value mismatch.
-fn account_values_equal_except_storage_root(a: &[u8], b: &[u8]) -> bool {
+/// Logs a warning and returns `false` when either side fails to parse as
+/// account RLP. The warning gives operators a clearer signal that the
+/// underlying cause is malformed data, not a value mismatch.
+pub(crate) fn account_values_equal_except_storage_root(a: &[u8], b: &[u8]) -> bool {
     let zeros = [0u8; 32];
     match (
         replace_list_field(a, 2, &zeros),
@@ -151,7 +150,7 @@ fn account_values_equal_except_storage_root(a: &[u8], b: &[u8]) -> bool {
         (Ok(na), Ok(nb)) => na == nb,
         (a_res, b_res) => {
             warn!(
-                "malformed account RLP at depth 64 during reconcile: proof={:?} branch={:?}",
+                "malformed account RLP at depth 64: left={:?} right={:?}",
                 a_res.err(),
                 b_res.err(),
             );
