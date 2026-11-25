@@ -2034,11 +2034,7 @@ fn test_proof_node_path_length_bound<H: HashMode>(nibbles: usize, accepted: bool
     );
 }
 
-/// A start or end proof holds at most `MAX_KEY_NIBBLES + 1` nodes (see
-/// `impl Version0 for ProofNode` in `de.rs`). A proof at that count
-/// deserializes, and one node over is rejected. The range proof carries the
-/// nodes as its start proof and the change proof as its end proof, so both
-/// proof types and both positions are exercised.
+/// A start or end proof with `MAX_KEY_NIBBLES + 1` nodes decodes. One more fails.
 #[hash_mode]
 #[test_case(MAX_KEY_NIBBLES + 1, true ; "at the bound")]
 #[test_case(MAX_KEY_NIBBLES + 2, false ; "one node over")]
@@ -2084,10 +2080,7 @@ fn test_proof_node_count_bound<H: HashMode>(count: usize, accepted: bool) {
     );
 }
 
-/// A proof carries at most [`MAX_PROOF_ITEMS`] key-value pairs or batch
-/// operations. A proof at that count deserializes, and one item over is
-/// rejected. Empty items are the smallest on the wire, so they reach the bound
-/// with the shortest body.
+/// A proof with [`MAX_PROOF_ITEMS`] items decodes. One more fails.
 #[hash_mode]
 #[test_case(MAX_PROOF_ITEMS, true ; "at the bound")]
 #[test_case(MAX_PROOF_ITEMS + 1, false ; "one item over")]
@@ -2182,10 +2175,8 @@ fn test_write_to_vec_item_count_bound(count: usize, accepted: bool) {
     check(result, &out, accepted);
 }
 
-/// The count is checked before any item is read, which is what keeps a decoded
-/// proof's memory bounded. Each body declares one item over its cap and follows
-/// the count with bytes that are not valid items. A check made only after
-/// reading would fail on those bytes with a different error.
+/// The count is checked before any item is read. The bytes after it are not
+/// valid items, so a later check would report a different error.
 #[test_case(ProofType::Range, &[], MAX_KEY_NIBBLES + 2, 5, &[0, 0] ; "proof nodes")]
 #[test_case(ProofType::Range, &[0, 0], MAX_PROOF_ITEMS + 1, 2, &[] ; "key-value pairs")]
 #[test_case(ProofType::Change, &[0, 0], MAX_PROOF_ITEMS + 1, 2, &[] ; "batch operations")]
