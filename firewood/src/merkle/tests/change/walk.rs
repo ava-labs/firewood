@@ -451,11 +451,7 @@ fn test_walk_stopping_short_on_a_removal_converges<H: HashMode>() {
     );
 }
 
-/// A walk with no limit over more changes than one proof can hold. The first
-/// change proof stops at [`PROOF_GENERATION_BUDGET`] and serializes, and the
-/// walk reaches `end_root`.
-///
-/// [`PROOF_GENERATION_BUDGET`]: crate::api::PROOF_GENERATION_BUDGET
+/// The first proof stops at the byte budget and still serializes.
 #[hash_mode]
 #[test]
 fn test_walk_without_limit_splits_large_changes<H: HashMode>() {
