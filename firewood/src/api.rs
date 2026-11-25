@@ -67,6 +67,11 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 /// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
+/// The most key-value pairs or batch operations a range or change proof may
+/// hold. Decoding a proof with more fails. Changing it needs coordination
+/// across versions.
+pub const MAX_PROOF_ITEMS: usize = 1 << 16;
+
 /// Rejects a batch operation that no proposal path may apply: a key or prefix
 /// longer than [`MAX_KEY_BYTES`], or, under the Ethereum hash scheme, a `Put`
 /// with an empty value, which that scheme hashes the same as no value.
