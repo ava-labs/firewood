@@ -67,12 +67,9 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 /// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
-/// The most key-value pairs or batch operations a serialized range or change
-/// proof may carry. [`FrozenRangeProof::from_slice`] and
-/// [`FrozenChangeProof::from_slice`] reject a proof with more. The cap on a
-/// proof's body size does not bound how many items it holds, because an item
-/// can take as little as two bytes on the wire. Changing it needs coordination,
-/// because no producer may emit more items than deployed decoders accept.
+/// The most key-value pairs or batch operations a range or change proof may
+/// hold. Decoding a proof with more fails. Changing it needs coordination
+/// across versions.
 pub const MAX_PROOF_ITEMS: usize = 1 << 16;
 
 /// Rejects a batch operation that no proposal path may apply: a key or prefix
