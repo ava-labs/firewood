@@ -332,6 +332,13 @@ pub enum ProofError {
     #[error("exclusion proof missing child at boundary index")]
     ExclusionProofMissingChild,
 
+    /// The proof reaches past an Ethereum-mode account branch that has a lone
+    /// storage child without including that child, the storage trie's root.
+    /// The account's hash does not bind where the child sits, so nothing below
+    /// the account is proven until the child is opened.
+    #[error("proof is missing the account's storage trie root node")]
+    MissingStorageRootNode,
+
     /// The proof's self-describing hash mode (from its header byte) does not
     /// match the mode the verifier was asked to verify against. Distinct from
     /// [`InvalidHeader::UnsupportedHashMode`](super::InvalidHeader::UnsupportedHashMode),
@@ -417,6 +424,36 @@ impl Hashable for ProofNode {
 
     fn children(&self) -> Children<Option<HashType>> {
         Children::from(&self.child_hashes)
+    }
+}
+
+/// The slot holding the lone storage child of an Ethereum-mode account branch
+/// at `full_path_len` nibbles, or `None` when the node is not one.
+///
+/// Such a child is the storage trie's own root, and the account's RLP takes its
+/// hash verbatim as `storageRoot`, where two or more children would hash the
+/// enclosing branch (`storage/src/hashers/ethhash.rs`). The account's hash
+/// therefore binds that hash but neither the slot it sits in nor the claim that
+/// it is the only child: any slot hashes the same. Opening the child binds
+/// both, because [`compute_node_hash_as_storage_trie_root`] folds the slot into
+/// the hash it re-derives — so a proof reaching past the account must carry it,
+/// and one that stops there proves nothing below it.
+///
+/// Takes the present children as an iterator so the caller pays for enumerating
+/// them only in the Ethereum mode, and so proof nodes and trie branches, which
+/// hold their children differently, can both ask.
+pub(crate) fn lone_account_storage_child<T>(
+    full_path_len: usize,
+    children: impl IntoIterator<Item = (PathComponent, T)>,
+    algorithm: NodeHashAlgorithm,
+) -> Option<(PathComponent, T)> {
+    if !algorithm.is_ethereum() || full_path_len != ACCOUNT_DEPTH_NIBBLES {
+        return None;
+    }
+    let mut present = children.into_iter();
+    match (present.next(), present.next()) {
+        (only @ Some(_), None) => only,
+        _ => None,
     }
 }
 
@@ -649,20 +686,29 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
                 };
 
+                let children = node.children();
+                // The walk follows an account's lone storage child wherever it
+                // sits; every other node only along the path toward `key`.
+                let storage_root_slot = lone_account_storage_child(
+                    node.full_path().len(),
+                    children.iter_present(),
+                    H::ALGORITHM,
+                )
+                .map(|(slot, _)| slot);
+                let descend = storage_root_slot.unwrap_or(key_nibble);
+
                 // Assert that every node's key is a prefix of the next node's
-                // key, and that the next node is on the path toward `key`.
-                if next_nibble(node.full_path(), next_node.full_path()) != Some(key_nibble) {
+                // key, and that the next node is the child just chosen.
+                if next_nibble(node.full_path(), next_node.full_path()) != Some(descend) {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                let children = node.children();
-                expected_hash = children[key_nibble]
+                expected_hash = children[descend]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
 
-                hash_as_storage_root =
-                    node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;
+                hash_as_storage_root = storage_root_slot.is_some();
             }
         }
 
@@ -686,10 +732,23 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         // extends past or diverges from the key), this is the valid
         // "divergent child" case — the node occupies the position where
         // the key would be, proving it cannot exist.
-        if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components())
-            && last_node.children()[next_idx].is_some()
-        {
-            return Err(ProofError::ExclusionProofMissingChild);
+        if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components()) {
+            let children = last_node.children();
+            if children[next_idx].is_some() {
+                return Err(ProofError::ExclusionProofMissingChild);
+            }
+            // An empty `next_idx` proves nothing when the account's lone child
+            // could sit at any slot. The walk above opens that child, so
+            // reaching here means the proof left it out.
+            if lone_account_storage_child(
+                last_node.full_path().len(),
+                children.iter_present(),
+                H::ALGORITHM,
+            )
+            .is_some()
+            {
+                return Err(ProofError::MissingStorageRootNode);
+            }
         }
 
         Ok(None)

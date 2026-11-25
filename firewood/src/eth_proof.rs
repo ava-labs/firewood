@@ -305,11 +305,9 @@ where
     V: DbView + ?Sized,
 {
     if account_node.child_hashes.count() == 1 {
-        // Single child nibble: the lone child is the storage root. When the
-        // requested slot's first nibble differs from the stored child's, the
-        // natural descent stops at the account node and never reaches that
-        // root; fetch the lone child so the verifier still receives the root
-        // needed to prove absence.
+        // Single child nibble: the lone child is the storage root. The path
+        // iterator supplies it even when the requested slot's first nibble
+        // differs from the stored child's, so the fetch is only a backstop.
         let owned_root: Option<ProofNode> = if storage_nodes.is_empty() {
             fetch_only_storage_child(view, account_key, account_node)?
         } else {

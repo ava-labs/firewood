@@ -253,6 +253,7 @@ pub(crate) fn remaining_subtrees_after_range_proof(
         proof.end_proof(),
         edge,
         verification.end_key(),
+        proof.hash_mode(),
     )?)
 }
 

@@ -1115,3 +1115,228 @@ fn test_out_of_range_terminal_account_with_storage(storage_child_nibbles: &[u8])
         &range_proof,
     );
 }
+
+/// Replace the depth-64 account node in `nodes` with a one-child node claiming
+/// the account's whole storage trie hangs off `slot`. The result hashes exactly
+/// like the real account — `storageRoot` is the lone child's hash verbatim — so
+/// the hash chain cannot tell the two apart.
+pub(super) fn forge_lone_storage_child<V: crate::api::DbView + ?Sized>(
+    view: &V,
+    account_key: &[u8; 32],
+    nodes: &[ProofNode],
+    slot: u8,
+) -> Box<[ProofNode]> {
+    let storage_root = crate::eth_proof::eth_get_proof(view, account_key, &[])
+        .expect("the account is present")
+        .storage_hash;
+    let mut lone_child: Children<Option<HashType>> = Children::new();
+    lone_child[PathComponent(U4::new_masked(slot))] =
+        Some(HashType::from(TrieHash::from(storage_root)));
+    let lone_child = lone_child.to_dense();
+
+    let mut forged = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if node.key.len() != ACCOUNT_DEPTH_NIBBLES {
+            forged.push(node.clone());
+            continue;
+        }
+        let swapped = ProofNode {
+            child_hashes: lone_child.clone(),
+            ..node.clone()
+        };
+        assert_eq!(
+            EthHash::to_hash(&swapped),
+            EthHash::to_hash(node),
+            "the forgery is invisible to the hash chain",
+        );
+        forged.push(swapped);
+    }
+    assert_eq!(
+        forged.len(),
+        nodes.len(),
+        "the proof must carry an account node to forge",
+    );
+    forged.into_boxed_slice()
+}
+
+/// An exclusion proof for a key below a single-storage-child account carries
+/// that child, the storage trie's root. The account's hash splices the child's
+/// hash in as `storageRoot` and would be the same whatever slot the child sat
+/// in, so without it the proof says nothing about the key.
+#[test]
+fn test_exclusion_below_lone_storage_child_carries_the_storage_root() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        ..
+    } = build_account_trie(&[0xA]);
+
+    // A storage key in a slot the account does not have: it fans out on
+    // nibble 5, the lone child on nibble 0xA.
+    let absent = account_storage_key(account_key.as_ref(), 0x50);
+    let proof = merkle.prove(absent.as_ref()).unwrap();
+    let nodes: &[ProofNode] = proof.as_ref();
+
+    let (terminal, ancestors) = nodes.split_last().expect("non-empty proof");
+    assert!(
+        terminal.key.len() > ACCOUNT_DEPTH_NIBBLES,
+        "the proof must end below the account, at its lone storage child",
+    );
+
+    proof
+        .verify(
+            absent.as_ref(),
+            None::<&[u8]>,
+            &root_hash,
+            EthHash::ALGORITHM,
+        )
+        .expect("the storage root proves the key's absence");
+
+    // Dropping it leaves an account node whose lone child could be claimed at
+    // any slot, so absence at nibble 5 is no longer proven.
+    let truncated: crate::Proof<Box<[ProofNode]>> = crate::Proof::new(ancestors.into());
+    let err = truncated
+        .verify(
+            absent.as_ref(),
+            None::<&[u8]>,
+            &root_hash,
+            EthHash::ALGORITHM,
+        )
+        .expect_err("an account's storage layout is not proven by the account alone");
+    assert!(
+        matches!(err, ProofError::MissingStorageRootNode),
+        "expected MissingStorageRootNode, got {err:?}",
+    );
+}
+
+/// A range proof bounded inside a single-storage-child account's storage, on
+/// the far side of the lone child from the bound. The honest shape the storage
+/// root rule has to keep accepting: the bound's slot is empty, and the account
+/// node alone cannot show that.
+#[test_case(0x50, 1 ; "bound_below_the_child")]
+#[test_case(0xF0, 2 ; "bound_above_the_child")]
+fn test_range_proof_bounded_off_path_inside_lone_storage_child_account(
+    bound_byte: u8,
+    expected_keys: usize,
+) {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        ..
+    } = build_account_trie(&[0xA]);
+
+    let end = account_storage_key(account_key.as_ref(), bound_byte);
+    let range_proof = merkle
+        .range_proof(Some(account_key.as_ref()), Some(end.as_ref()), None)
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), expected_keys);
+
+    assert_range_proof_roundtrips(
+        Some(account_key.as_ref()),
+        Some(end.as_ref()),
+        &root_hash,
+        &range_proof,
+    );
+}
+
+/// A peer cannot pass a multi-slot account off as a single-slot one to hide the
+/// storage a boundary covers. The forged node hashes exactly like the honest
+/// one — the account's `storageRoot` is its lone child's hash verbatim — so
+/// only the storage root rule rejects it.
+#[test]
+fn test_forged_lone_storage_child_cannot_hide_in_range_slots() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0x1, 0xF]);
+
+    // Start inside the account's storage, between its two slots: the slot at
+    // nibble 0xF is in range, the one at nibble 1 is not. The range is
+    // unbounded above, so the account node appears only in the start proof.
+    let start = account_storage_key(account_key.as_ref(), 0x80);
+    let honest = merkle
+        .range_proof(Some(start.as_ref()), None, None)
+        .unwrap();
+    let in_range_slot = storage_keys[1].as_ref();
+    assert_eq!(honest.key_values()[0].0.as_ref(), in_range_slot);
+    verify_range_proof(Some(start.as_ref()), None::<&[u8]>, &root_hash, &honest)
+        .expect("the honest proof verifies");
+
+    // Claim the account's whole storage hangs off the out-of-range slot, and
+    // drop the in-range one: the forged account says it never existed.
+    let account_key_bytes: [u8; 32] = account_key.as_ref().try_into().unwrap();
+    let forged_start = forge_lone_storage_child(
+        merkle.nodestore(),
+        &account_key_bytes,
+        honest.start_proof().as_ref(),
+        0x1,
+    );
+    let forged = crate::api::FrozenRangeProof::new(
+        crate::Proof::new(forged_start),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        honest.key_values()[1..].to_vec().into_boxed_slice(),
+        EthHash::ALGORITHM,
+    );
+
+    let err = verify_range_proof(Some(start.as_ref()), None::<&[u8]>, &root_hash, &forged)
+        .expect_err("hidden in-range storage must be rejected");
+    assert!(
+        matches!(
+            err,
+            crate::api::Error::ProofError(ProofError::MissingStorageRootNode)
+        ),
+        "expected MissingStorageRootNode, got {err:?}",
+    );
+}
+
+/// The same forgery with the bound at the account key itself is *not* rejected,
+/// and cannot be: an inclusion proof of an account says nothing about its
+/// storage, so there is no unproven claim to reject. It buys the peer nothing
+/// either. Dropping the in-range slot drops the last key-value, which pulls the
+/// end-proof anchor back to the account, so the proven range narrows to the
+/// account alone and the hidden slot stays outstanding for the next request.
+#[test]
+fn test_forged_lone_storage_child_at_account_bound_narrows_the_proven_range() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        ..
+    } = build_account_trie(&[0x1, 0xF]);
+
+    let end = account_storage_key(account_key.as_ref(), 0x80);
+    let honest = merkle.range_proof(None, Some(end.as_ref()), None).unwrap();
+    assert_eq!(honest.key_values().len(), 2);
+
+    let account_key_bytes: [u8; 32] = account_key.as_ref().try_into().unwrap();
+    let forged_end = forge_lone_storage_child(
+        merkle.nodestore(),
+        &account_key_bytes,
+        honest.end_proof().as_ref(),
+        0xF,
+    );
+    let forged = crate::api::FrozenRangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(forged_end),
+        honest.key_values()[..1].to_vec().into_boxed_slice(),
+        EthHash::ALGORITHM,
+    );
+
+    let proven = crate::merkle::verify_range_proof(
+        None::<&[u8]>,
+        Some(end.as_ref()),
+        &root_hash,
+        EthHash::ALGORITHM,
+        &forged,
+    )
+    .expect("an inclusion proof of the account is a true statement about it");
+    assert_eq!(
+        proven.end.as_deref(),
+        Some(account_key.as_ref()),
+        "the proven range must stop at the account, leaving its storage unclaimed",
+    );
+}
