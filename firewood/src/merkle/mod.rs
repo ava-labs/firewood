@@ -82,6 +82,7 @@ use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::ProofEdge;
 use crate::proofs::change::ChangeProof;
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+use crate::proofs::types::lone_account_storage_child;
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -447,9 +448,13 @@ fn classify_terminal<'a>(
 /// [`TerminalMarking::OnPath`], only the straddling child's far side is marked
 /// here; the change-proof caller uses the returned classification to decide that
 /// child itself against the proving trie. Range proofs discard it.
+///
+/// A trailing off-path storage root is split off first and marked on its own —
+/// see [`split_off_path_storage_root`].
 fn compute_outside_children<'a>(
     proof_nodes: &'a [ProofNode],
     boundary: &EdgeBoundary<'_>,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(HashMap<PathBuf, ChildMask>, Option<TerminalClass<'a>>), ProofError> {
     // Invariant from `right_edge`: `RightBoundary::OutOfRange(K)` is only
     // constructed when `K` is the end-proof's terminal full key (and
@@ -468,11 +473,29 @@ fn compute_outside_children<'a>(
         );
     }
 
-    let terminal = classify_terminal(proof_nodes, boundary);
+    let (path_nodes, storage_root) = split_off_path_storage_root(proof_nodes, boundary, algorithm);
+    let terminal = classify_terminal(path_nodes, boundary);
+
+    // The boundary descends below this terminal, so the hash step would take
+    // the far side of it from the proof. An account that never opened its lone
+    // storage child cannot say what is on either side: without it the account's
+    // whole storage root comes from the proof while the in-range side is
+    // claimed empty. `Proof::value_digest` rejects this too; re-checked here so
+    // the substitution never depends on that pass having run.
+    if storage_root.is_none()
+        && let Some(TerminalClass {
+            node,
+            marking: TerminalMarking::OnPath(_),
+        }) = &terminal
+        && lone_account_storage_child(node.key.len(), present_children(node), algorithm).is_some()
+    {
+        return Err(ProofError::MissingStorageRootNode);
+    }
+
     let mut result: HashMap<PathBuf, ChildMask> = HashMap::new();
 
     // Non-terminal nodes: derive the on-path nibble from the next proof node
-    for (parent, child) in proof_nodes.iter().zip(proof_nodes.iter().skip(1)) {
+    for (parent, child) in path_nodes.iter().zip(path_nodes.iter().skip(1)) {
         let on_path_nibble = child
             .key
             .get(parent.key.len())
@@ -487,24 +510,98 @@ fn compute_outside_children<'a>(
 
     // Terminal node: apply its marking (see `classify_terminal`).
     if let Some(terminal) = &terminal {
-        match terminal.marking {
-            TerminalMarking::AllOutside => {
-                result.insert(terminal.node.key.clone(), ChildMask::ALL);
-            }
-            TerminalMarking::OnPath(on_path) => {
-                // Mark children on the far side of the on-path nibble outside.
-                // The on-path child itself is decided by the caller.
-                let entry = result.entry(terminal.node.key.clone()).or_default();
-                *entry = if boundary.is_left() {
-                    entry.set_below(on_path.0)
-                } else {
-                    entry.set_above(on_path.0)
-                };
-            }
-        }
+        apply_terminal_marking(&mut result, terminal, boundary);
+    }
+
+    // An off-path storage root lies wholly on one side of the boundary, so the
+    // same classification decides it: outside when the boundary is past it,
+    // in range otherwise.
+    if let Some(root) = storage_root
+        && let Some(class) = classify_terminal(std::slice::from_ref(root), boundary)
+    {
+        apply_terminal_marking(&mut result, &class, boundary);
     }
 
     Ok((result, terminal))
+}
+
+/// A proof node's present children, keyed as [`Children`] keys them.
+fn present_children(node: &ProofNode) -> impl Iterator<Item = (PathComponent, &HashType)> {
+    node.child_hashes
+        .iter_present()
+        .map(|(index, hash)| (PathComponent(index), hash))
+}
+
+/// Mark a terminal's own children according to its [`TerminalMarking`].
+fn apply_terminal_marking(
+    result: &mut HashMap<PathBuf, ChildMask>,
+    terminal: &TerminalClass<'_>,
+    boundary: &EdgeBoundary<'_>,
+) {
+    match terminal.marking {
+        TerminalMarking::AllOutside => {
+            result.insert(terminal.node.key.clone(), ChildMask::ALL);
+        }
+        TerminalMarking::OnPath(on_path) => {
+            // Mark children on the far side of the on-path nibble outside.
+            // The on-path child itself is decided by the caller.
+            let entry = result.entry(terminal.node.key.clone()).or_default();
+            *entry = if boundary.is_left() {
+                entry.set_below(on_path.0)
+            } else {
+                entry.set_above(on_path.0)
+            };
+        }
+    }
+}
+
+/// Splits a trailing off-path storage root off an edge proof's nodes.
+///
+/// [`Merkle::prove`] descends into an account's lone storage child even when
+/// the key turns elsewhere (see [`lone_account_storage_child`]). That child
+/// authenticates the account's storage layout; it is not a step toward
+/// `boundary`. Reading a path nibble out of it would put the span between the
+/// boundary and the child's slot on the wrong side, and the boundary's on-path
+/// marking belongs to the account.
+fn split_off_path_storage_root<'a>(
+    proof_nodes: &'a [ProofNode],
+    boundary: &EdgeBoundary<'_>,
+    algorithm: NodeHashAlgorithm,
+) -> (&'a [ProofNode], Option<&'a ProofNode>) {
+    /// Whether `key`'s nibbles begin with `prefix` followed by `slot`.
+    fn descends_into(key: &[u8], prefix: &[PathComponent], slot: PathComponent) -> bool {
+        let mut nibbles = NibblesIterator::new(key);
+        prefix
+            .iter()
+            .copied()
+            .chain(once(slot))
+            .all(|component| nibbles.next() == Some(component.as_u8()))
+    }
+
+    let unsplit = (proof_nodes, None);
+    let Some((storage_root, path)) = proof_nodes.split_last() else {
+        return unsplit;
+    };
+    let Some(account) = path.last() else {
+        return unsplit;
+    };
+    let Some((slot, _)) =
+        lone_account_storage_child(account.key.len(), present_children(account), algorithm)
+    else {
+        return unsplit;
+    };
+    if storage_root.key.get(account.key.len()) != Some(&slot) {
+        return unsplit;
+    }
+    // When the boundary itself runs through that slot the child is an ordinary
+    // descent, and the walk handles it like any other step.
+    if boundary
+        .boundary_key()
+        .is_some_and(|key| descends_into(key, &account.key, slot))
+    {
+        return unsplit;
+    }
+    (path, Some(storage_root))
 }
 
 /// Nibble prefixes of the non-empty subtrees an end proof shows to the right
@@ -519,9 +616,13 @@ pub(crate) fn subtrees_right_of(
     end_proof: &[ProofNode],
     right_edge: &[u8],
     end_key: Option<&[u8]>,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<Vec<PathBuf>, ProofError> {
     let boundary = EdgeBoundary::Right(RightBoundary::InRange(Some(right_edge)));
-    let (outside, _) = compute_outside_children(end_proof, &boundary)?;
+    let (outside, _) = compute_outside_children(end_proof, &boundary, algorithm)?;
+    // An off-path storage root is already covered by the account's own masked
+    // slot, so walking the path alone lists each remaining subtree once.
+    let (path_nodes, _) = split_off_path_storage_root(end_proof, &boundary, algorithm);
     let past_edge = |path: &PathBuf| {
         path.iter()
             .map(|c| c.as_u8())
@@ -529,7 +630,7 @@ pub(crate) fn subtrees_right_of(
     };
 
     let mut subtrees = Vec::new();
-    let mut nodes = end_proof.iter().rev().peekable();
+    let mut nodes = path_nodes.iter().rev().peekable();
     if let Some(terminal) = nodes.next_if(|t| past_edge(&t.key)) {
         subtrees.push(terminal.key.clone());
     }
@@ -581,8 +682,9 @@ fn change_outside_children<S: ReadableStorage, H: HashMode>(
     // Each edge's mask comes back with its terminal classification, reused for
     // the on-path decision below.
     let (mut outside_children, start_terminal) =
-        compute_outside_children(start_proof.as_ref(), &start_boundary)?;
-    let (end_children, end_terminal) = compute_outside_children(end_proof.as_ref(), &end_boundary)?;
+        compute_outside_children(start_proof.as_ref(), &start_boundary, H::ALGORITHM)?;
+    let (end_children, end_terminal) =
+        compute_outside_children(end_proof.as_ref(), &end_boundary, H::ALGORITHM)?;
     for (key, flags) in end_children {
         *outside_children.entry(key).or_default() |= flags;
     }
@@ -1383,8 +1485,9 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
     let start_boundary = EdgeBoundary::Left(first_key_bytes);
     let end_boundary = EdgeBoundary::Right(right_boundary);
     let (mut outside_children, _) =
-        compute_outside_children(proof.start_proof().as_ref(), &start_boundary)?;
-    let (end_children, _) = compute_outside_children(proof.end_proof().as_ref(), &end_boundary)?;
+        compute_outside_children(proof.start_proof().as_ref(), &start_boundary, H::ALGORITHM)?;
+    let (end_children, _) =
+        compute_outside_children(proof.end_proof().as_ref(), &end_boundary, H::ALGORITHM)?;
     for (key, flags) in end_children {
         let entry = outside_children.entry(key).or_default();
         *entry |= flags;

@@ -17,6 +17,7 @@ use test_case::test_case;
 
 use super::*;
 use crate::merkle::tests::ethhash::empty_code_hash;
+use crate::merkle::tests::ethhash::forge_lone_storage_child;
 use crate::merkle::tests::ethhash::rlp_encode_account;
 use crate::merkle::tests::ethhash::rlp_encode_storage;
 
@@ -461,5 +462,154 @@ fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
                 value: slot_b.as_ref(),
             },
         ],
+    );
+}
+
+/// An honest change proof whose last op deletes an account's second-to-last
+/// storage slot. Under `end_root` the account is left with one storage child,
+/// at a different nibble than the deleted key, so the end proof carries the
+/// storage trie's root: the account node alone would not show the deleted
+/// slot's position is empty.
+#[test]
+fn test_change_proof_trailing_delete_leaving_lone_storage_child() {
+    let deleted = key_under_account(&ACCOUNT_KEY, 0x10);
+    let kept = key_under_account(&ACCOUNT_KEY, 0x30);
+    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
+    let storage_value = rlp_encode_storage(&[7u8; 32]);
+
+    let (source, target, start_root_target, _ds, _dt) = setup_source_target![
+        mode = EthHash;
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (deleted.as_ref(), storage_value.as_ref()),
+        (kept.as_ref(), storage_value.as_ref())
+    ];
+    let start_root = source.root_hash().unwrap();
+    source
+        .propose(vec![BatchOp::Delete::<_, &[u8]> {
+            key: deleted.as_ref(),
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let end_root = source.root_hash().unwrap();
+
+    let proof = source
+        .change_proof(
+            start_root,
+            end_root.clone(),
+            Some(ACCOUNT_KEY.as_ref()),
+            None,
+            None,
+        )
+        .unwrap();
+    let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
+    assert!(
+        end_nodes
+            .last()
+            .is_some_and(|n| n.key.len() > ACCOUNT_DEPTH_NIBBLES),
+        "the end proof must carry the account's remaining storage root",
+    );
+
+    let ctx =
+        verify_change_proof_structure(&proof, end_root, Some(ACCOUNT_KEY.as_ref()), None, None)
+            .unwrap();
+    verify_and_check(&target, &proof, &ctx, start_root_target).unwrap();
+}
+
+/// The storage-hiding change proof the account fold would otherwise admit: a
+/// forged terminal claims the account's whole storage trie hangs off one
+/// out-of-range slot, and a trailing `Delete` of an absent key puts the proven
+/// right edge inside that storage so the ops can delete what the account really
+/// holds there. The forged node hashes exactly like the honest one, so only the
+/// storage root rule rejects it.
+#[test]
+fn test_forged_lone_storage_child_change_proof_cannot_delete_in_range_slots() {
+    let hidden = key_under_account(&ACCOUNT_KEY, 0x10);
+    let out_of_range = key_under_account(&ACCOUNT_KEY, 0xF0);
+    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
+    let storage_value = rlp_encode_storage(&[7u8; 32]);
+    let other_key: [u8; 32] = [0xFFu8; 32];
+
+    let (source, target, start_root_target, _ds, _dt) = setup_source_target![
+        mode = EthHash;
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (hidden.as_ref(), storage_value.as_ref()),
+        (out_of_range.as_ref(), storage_value.as_ref())
+    ];
+    // A change elsewhere in the trie, so start and end roots differ.
+    let other_value = rlp_encode_account(2, 200, &[0u8; 32], &empty_code_hash());
+    let (_start_root, end_root) =
+        setup_2nd_commit!(source, [(other_key.as_ref(), other_value.as_ref())]);
+
+    // Both boundary proofs are honest except for the account node, which the
+    // peer replaces with a one-child node carrying the account's real
+    // storageRoot at the out-of-range slot.
+    let end_rev = source.revision(end_root.clone()).unwrap();
+    let probe = key_under_account(&ACCOUNT_KEY, 0x80);
+    let forge = |key: &[u8]| {
+        let honest = end_rev.single_key_proof(key).unwrap();
+        crate::Proof::new(forge_lone_storage_child(
+            &*end_rev,
+            &ACCOUNT_KEY,
+            honest.as_ref(),
+            0xF,
+        ))
+    };
+
+    // Delete a storage slot that exists under `end_root`, then pad with a
+    // `Delete` of an absent key so the right edge lands inside the account's
+    // storage, past the deletion.
+    let ops: Box<[BatchOp<Key, Value>]> = Box::new([
+        BatchOp::Delete {
+            key: hidden.to_vec().into(),
+        },
+        BatchOp::Delete {
+            key: probe.to_vec().into(),
+        },
+    ]);
+    let forged = FrozenChangeProof::new(
+        forge(ACCOUNT_KEY.as_ref()),
+        forge(probe.as_ref()),
+        ops,
+        EthHash::ALGORITHM,
+    );
+
+    // The structural pass rejects it: the padding `Delete` makes the forged
+    // account the end proof's terminal, and the account cannot prove the key
+    // below it absent.
+    let err = verify_change_proof_structure(
+        &forged,
+        end_root.clone(),
+        Some(ACCOUNT_KEY.as_ref()),
+        None,
+        None,
+    )
+    .expect_err("an unopened lone-child account proves nothing below itself");
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::MissingStorageRootNode)
+        ),
+        "expected MissingStorageRootNode, got {err:?}",
+    );
+
+    // The root-hash pass rejects it on its own as well, so taking the account's
+    // storage root from the proof never rests on the structural pass having
+    // run. The context is the one that pass would have derived: the padding
+    // `Delete`'s key as the right edge.
+    let ctx = ChangeProofVerificationContext::for_test(
+        end_root,
+        Some(ACCOUNT_KEY.to_vec().into()),
+        None,
+        Some(probe.to_vec().into()),
+    );
+    let err = verify_and_check(&target, &forged, &ctx, start_root_target)
+        .expect_err("deleting storage the account still holds must be rejected");
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::MissingStorageRootNode)
+        ),
+        "expected MissingStorageRootNode, got {err:?}",
     );
 }

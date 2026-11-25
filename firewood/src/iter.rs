@@ -21,6 +21,7 @@ use crate::api::KeyType;
 use crate::api::KeyValuePair;
 use crate::merkle::Key;
 use crate::merkle::Value;
+use crate::proofs::types::lone_account_storage_child;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -403,6 +404,11 @@ enum PathIteratorState<'a> {
 /// possibly the last, which may be a divergent node whose partial path does
 /// not match the key. Divergent nodes are included for exclusion proofs.
 /// If the given key is in the trie, the last node is at that key.
+///
+/// Under the Ethereum hash mode the path descends from an account branch with
+/// exactly one child into that child, the storage trie's root, even when it
+/// sits at a different nibble than the key's: the account's hash leaves that
+/// slot free, so stopping at the account would prove nothing below it.
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T> {
     state: PathIteratorState<'b>,
@@ -434,6 +440,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let must_recompute_storage_hash = self.merkle.must_recompute_storage_hash();
+        let algorithm = self.merkle.node_hash_algorithm();
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
         let Self { state, merkle } = &mut *self;
@@ -493,45 +500,42 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 let child = &branch.children[next_unmatched_key_nibble];
                 match child {
                     None => {
-                        // There's no child at the index of the next nibble in the key.
-                        // There's no node at `key` in this trie so we're done.
-                        self.state = PathIteratorState::Exhausted;
-                        Some(Ok(PathIterItem {
-                            key_nibbles: node_key,
-                            node: saved_node,
-                            next_nibble: None,
-                            must_recompute_storage_hash,
-                        }))
-                    }
-                    Some(Child::AddressWithHash(child_addr, _)) => {
-                        let child = match merkle.read_node(*child_addr) {
+                        // There's no child at the index of the next nibble in
+                        // the key, so there's no node at `key` in this trie.
+                        // An account's lone storage child is the exception (see
+                        // the type docs): descend into it with the key spent,
+                        // which yields it and stops.
+                        let Some((slot, child)) = lone_account_storage_child(
+                            node_key.len(),
+                            branch.children.iter_present(),
+                            algorithm,
+                        ) else {
+                            self.state = PathIteratorState::Exhausted;
+                            return Some(Ok(PathIterItem {
+                                key_nibbles: node_key,
+                                node: saved_node,
+                                next_nibble: None,
+                                must_recompute_storage_hash,
+                            }));
+                        };
+                        let child = match child.as_shared_node(merkle) {
                             Ok(child) => child,
                             Err(e) => return Some(Err(e)),
                         };
 
-                        matched_key.push(next_unmatched_key_nibble.as_u8());
+                        matched_key.push(slot.as_u8());
                         *node = child;
+                        *unmatched_key = NibblesIterator::new(&[]);
 
                         Some(Ok(PathIterItem {
                             key_nibbles: node_key,
                             node: saved_node,
-                            next_nibble: Some(next_unmatched_key_nibble),
+                            next_nibble: Some(slot),
                             must_recompute_storage_hash,
                         }))
                     }
-                    Some(Child::Node(child)) => {
-                        matched_key.push(next_unmatched_key_nibble.as_u8());
-                        *node = child.clone().into();
-
-                        Some(Ok(PathIterItem {
-                            key_nibbles: node_key,
-                            node: saved_node,
-                            next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash,
-                        }))
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = match maybe_persisted.as_shared_node(merkle) {
+                    Some(child) => {
+                        let child = match child.as_shared_node(merkle) {
                             Ok(child) => child,
                             Err(e) => return Some(Err(e)),
                         };
