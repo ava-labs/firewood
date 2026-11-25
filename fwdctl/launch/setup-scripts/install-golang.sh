@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/toolchain-versions.sh
-. "$SCRIPT_DIR/../../infra/toolchain-versions.sh"
+. "$SCRIPT_DIR/../../../infra/toolchain-versions.sh"
 
 INSTALL_DIR="/usr/local/go"
 

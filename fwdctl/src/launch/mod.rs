@@ -297,7 +297,7 @@ pub struct DeployOptions {
     #[arg(long = "nblocks", value_name = "SIZE", value_enum, default_value_t = NBlocks::OneM)]
     pub nblocks: NBlocks,
 
-    /// Launch scenario from `benchmark/launch/launch-stages.yaml`
+    /// Launch scenario from `fwdctl/launch/launch-stages.yaml`
     #[arg(
         long = "scenario",
         value_name = "SCENARIO",

@@ -458,7 +458,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	if root == EmptyRoot {
 		return nil, ErrRevisionNotFound
 	}
-	return db.Revision(root)
+	return db.revision(root)
 }
 
 // Revision returns a revision of the database.
@@ -473,16 +473,15 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
+	return db.revision(root)
+}
 
-	rev, err := getRevisionFromResult(C.fwd_get_revision(
+// revision assumes at least a read lock on db.handleLock is held.
+func (db *Database) revision(root Hash) (*Revision, error) {
+	return getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
 	), db.keepAlives)
-	if err != nil {
-		return nil, err
-	}
-
-	return rev, nil
 }
 
 // CloseOption configures the behavior of [Database.Close].

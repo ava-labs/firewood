@@ -114,8 +114,7 @@ impl LogArgs<'_> {
             .filter_level(level)
             .format(move |buffer, record| {
                 // matches env_logger's default format style
-                // TODO(AminR443): adopt slog format like avalanchego
-                // https://github.com/ava-labs/firewood/issues/2227
+                // TODO(#2227): adopt slog format like avalanchego
                 let timestamp = buffer.timestamp_millis();
                 if let Some(db_tag) = record_db_tag(record) {
                     writeln!(
