@@ -1149,20 +1149,18 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     /// list empty, and a child of the proposal replaces `parent`'s nodes itself.
     #[must_use]
     pub fn share_unchanged_root<F: Parentable>(mut self, parent: &NodeStore<F, S, H>) -> Self {
-        if self.kind.root_hash() != parent.kind.root_hash() {
-            return self;
+        // An empty trie has no root to share, so both roots must be present.
+        // Equal hashes then mean the two tries are the same.
+        if let Some(hash) = self.kind.root.as_ref().and_then(Child::hash)
+            && let Some(parent_root) = parent.kind.root_as_child()
+            && parent_root.hash() == Some(hash)
+        {
+            self.kind = Arc::new(ImmutableProposal {
+                deleted: Box::default(),
+                parent: Arc::clone(&self.kind.parent),
+                root: Some(parent_root.clone()),
+            });
         }
-        let root = match (&self.kind.root, parent.kind.root()) {
-            (Some(Child::MaybePersisted(_, hash)), Some(root)) => {
-                Some(Child::MaybePersisted(root, hash.clone()))
-            }
-            _ => return self,
-        };
-        self.kind = Arc::new(ImmutableProposal {
-            deleted: Box::default(),
-            parent: Arc::clone(&self.kind.parent),
-            root,
-        });
         self
     }
 

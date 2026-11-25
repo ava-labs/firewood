@@ -55,19 +55,21 @@ fn leaked_bytes(report: &CheckerReport) -> u64 {
         .sum()
 }
 
-/// Seeds a database, runs `workload` on it, commits until every revision the
-/// workload touched has aged out, and returns the bytes the checker reports as
-/// leaked.
-///
-/// Panics if the checker reports anything other than leaked areas.
-fn leaked_after<H: HashMode>(workload: impl FnOnce(&TestDb<H>)) -> u64 {
+fn seeded<H: HashMode>() -> TestDb<H> {
     let cfg = DbConfig::builder()
         .manager(RevisionManagerConfig::builder().max_revisions(2).build())
         .build();
     let db = TestDb::<H>::new_with_config(cfg);
     let seed: Vec<Op> = (0u8..32).map(|i| put(i.wrapping_mul(37), i)).collect();
     db.propose(seed).unwrap().commit().unwrap();
+    db
+}
 
+/// Runs `workload` on `db`, commits until every revision the workload touched
+/// has aged out, and returns the bytes the checker reports as leaked.
+///
+/// Panics if the checker reports anything other than leaked areas.
+fn leaked_after<H: HashMode>(db: TestDb<H>, workload: impl FnOnce(&TestDb<H>)) -> u64 {
     workload(&db);
 
     // age every revision above out of the in-memory window
@@ -90,14 +92,22 @@ fn leaked_after<H: HashMode>(workload: impl FnOnce(&TestDb<H>)) -> u64 {
 }
 
 /// Asserts that `workload` leaves the space accounting that committing each of
-/// `direct` on the latest revision in turn leaves.
-fn assert_leaks_like<H: HashMode>(direct: &[Op], workload: impl FnOnce(&TestDb<H>)) {
-    let expected = leaked_after::<H>(|db| {
+/// `direct` on the latest revision in turn leaves, starting from `open`.
+fn assert_leaks_like_on<H: HashMode>(
+    open: impl Fn() -> TestDb<H>,
+    direct: &[Op],
+    workload: impl FnOnce(&TestDb<H>),
+) {
+    let expected = leaked_after(open(), |db| {
         for op in direct {
             db.propose(vec![op.clone()]).unwrap().commit().unwrap();
         }
     });
-    assert_eq!(leaked_after::<H>(workload), expected);
+    assert_eq!(leaked_after(open(), workload), expected);
+}
+
+fn assert_leaks_like<H: HashMode>(direct: &[Op], workload: impl FnOnce(&TestDb<H>)) {
+    assert_leaks_like_on(seeded::<H>, direct, workload);
 }
 
 /// A proposal that changes nothing commits through the trivial path and never
@@ -178,4 +188,21 @@ fn test_trivial_commit_of_a_batch_that_rewrites_values<H: HashMode>() {
         absorbed.commit().unwrap();
         child.commit().unwrap();
     });
+}
+
+/// The committed root of a reopened database is an address and a hash, and the
+/// unchanged proposal shares it as such.
+#[hash_mode]
+#[test]
+fn test_trivial_commit_after_reopen<H: HashMode>() {
+    assert_leaks_like_on(
+        || seeded::<H>().reopen(),
+        &[put(0xaa, 0)],
+        |db| {
+            let absorbed = db.propose(Vec::<Op>::new()).unwrap();
+            let child = absorbed.propose(vec![put(0xaa, 0)]).unwrap();
+            absorbed.commit().unwrap();
+            child.commit().unwrap();
+        },
+    );
 }
