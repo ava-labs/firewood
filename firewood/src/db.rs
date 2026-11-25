@@ -59,7 +59,9 @@ use crate::manager::RevisionManagerConfig;
 use crate::merkle::Merkle;
 use crate::merkle::Value;
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::merkle::reconcile::account_values_equal_except_storage_root;
 use crate::merkle::verify_change_proof_root_hash;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::verify_change_proof_structure;
 
 #[derive(Error, Debug)]
@@ -823,6 +825,30 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
     }
 }
 
+/// Length in bytes of an Ethereum account key.
+const ACCOUNT_KEY_BYTES: usize = ACCOUNT_DEPTH_NIBBLES / 2;
+
+/// Returns `true` when `op` puts an account whose only difference from
+/// `old_parent` is the storage root.
+///
+/// The Ethereum hasher derives that field from the account's storage and writes
+/// it into the stored value, so such a `Put` in a rebuilt batch means the
+/// proposal changed the account's storage and not the account.
+fn changes_only_storage_root<T: TrieReader>(
+    old_parent: &Merkle<T>,
+    op: &BatchOp<crate::merkle::Key, Value>,
+) -> Result<bool, FileIoError> {
+    let BatchOp::Put { key, value } = op else {
+        return Ok(false);
+    };
+    if key.len() != ACCOUNT_KEY_BYTES {
+        return Ok(false);
+    }
+    Ok(old_parent
+        .get_value(key)?
+        .is_some_and(|old| account_values_equal_except_storage_root(value, &old)))
+}
+
 impl<H: HashMode> Proposal<'_, H> {
     /// Commit the proposal, automatically rebasing if the parent revision
     /// is no longer the latest.
@@ -831,6 +857,13 @@ impl<H: HashMode> Proposal<'_, H> {
     /// parent matches the current revision, and if not, diffs the proposal
     /// against its original parent to reconstruct the batch ops, re-proposes
     /// them against the current revision, and commits the new proposal.
+    ///
+    /// Under the Ethereum hash scheme, a reconstructed `Put` that changes nothing
+    /// in an account but its storage root is dropped instead of re-proposed,
+    /// because hashing derives that field from the account's storage. A `Put` in
+    /// the original batch that leaves an account's fields as they were in the
+    /// original parent does not survive the rebase, although replaying that batch
+    /// would apply it.
     ///
     /// The write lock is held throughout to prevent other commits from
     /// interleaving between the rebase and commit.
@@ -872,9 +905,17 @@ impl<H: HashMode> Proposal<'_, H> {
                     empty_parent = nodestore.empty_committed_sibling();
                     &empty_parent
                 };
-            let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
-            let batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
-                diff.collect::<Result<_, _>>()?;
+            let old_parent = Merkle::from(old_parent_ref);
+            let batch_ops = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?
+                .filter_map(|op| {
+                    op.and_then(|op| {
+                        let drop = H::ALGORITHM.is_ethereum()
+                            && changes_only_storage_root(&old_parent, &op)?;
+                        Ok((!drop).then_some(op))
+                    })
+                    .transpose()
+                })
+                .collect::<Result<Vec<_>, FileIoError>>()?;
 
             let new_proposal = db.propose_with_parent(batch_ops, &**current)?;
             nodestore = new_proposal.nodestore;
