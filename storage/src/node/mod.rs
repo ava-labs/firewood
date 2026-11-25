@@ -659,7 +659,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
                 if i.as_u8() == 15 {
                     Some(Child::AddressWithHash(
                         LinearAddress::new(1).unwrap(),
-                        child_hash.clone(),
+                        child_hash,
                     ))
                 } else {
                     None

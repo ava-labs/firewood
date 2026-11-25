@@ -20,7 +20,7 @@ pub struct InvalidTrieHashLength(pub usize);
 
 /// A hash value inside a merkle trie
 /// We use the same type as returned by sha2 here to avoid copies
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub struct TrieHash([u8; 32]);
 
 /// Intentionally, there is no [`Default`] implementation for [`TrieHash`] to force

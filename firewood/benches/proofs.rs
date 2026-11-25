@@ -78,7 +78,7 @@ fn bench_proofs<H: HashMode>(criterion: &mut Criterion) {
         b.iter(|| {
             verify_range_proof_structure(
                 &proof,
-                root_hash.clone(),
+                root_hash,
                 Some(first),
                 Some(last),
                 H::ALGORITHM,
