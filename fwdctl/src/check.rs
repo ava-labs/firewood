@@ -73,6 +73,9 @@ fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
     )?;
+    if opts.fix {
+        fb.lock()?;
+    }
     let storage = Arc::new(fb);
 
     let progress_bar = ProgressBar::no_length()
