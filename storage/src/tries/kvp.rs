@@ -644,15 +644,15 @@ mod tests {
     }; "single key")]
     #[test_case(&[("a", "1"), ("b", "2")], both_hashes!{
         merkledb16: b"ff783ce73f7a5fa641991d76d626eefd7840a839590db4269e1e92359ae60593",
-        ethereum: rlp(b"d81696d580c22031c220328080808080808080808080808080"),
+        ethereum: rlp(b"d716d580c22031c220328080808080808080808080808080"),
     }; "two disjoint keys")]
     #[test_case(&[("a", "1"), ("ab", "2")], both_hashes!{
         merkledb16: b"c5def8c64a2f3b8647283251732b68a2fb185f8bf92c0103f31d5ec69bb9a90c",
-        ethereum: rlp(b"d882006194d3808080808080c2323280808080808080808031"),
+        ethereum: rlp(b"d7820061d3808080808080c2323280808080808080808031"),
     }; "two nested keys")]
     #[test_case(&[("a", "1"), ("b", "2"), ("c", "3")], both_hashes!{
         merkledb16: b"95618fd79a0ca2d7612bf9fd60663b81f632c9a65e76bb5bc3ed5f3045cf1404",
-        ethereum: rlp(b"da1698d780c22031c22032c2203380808080808080808080808080"),
+        ethereum: rlp(b"d916d780c22031c22032c2203380808080808080808080808080"),
     }; "three disjoint keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3")], both_hashes!{
         merkledb16: b"ee8a7a1409935f58ab6ce40a1e05ee2a587bdc06c201dbec7006ee1192e71f70",
@@ -664,7 +664,7 @@ mod tests {
     }; "nested sibling")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("abc", "3")], both_hashes!{
         merkledb16: b"af11454e2f920fb49041c9890c318455952d651b7d835f5731218dbc4bde4805",
-        ethereum: b"eabecb5e4efb9b5824cd926fac6350bdcb4a599508b16538afde303d72571169",
+        ethereum: b"c99eba5c289c39c42ea793680a6fb52083238734ef6cf4b61138491f5f4ea34b",
     }; "linear nested keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4")], both_hashes!{
         merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",

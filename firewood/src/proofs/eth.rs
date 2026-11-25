@@ -140,7 +140,9 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
         branch_bytes
     };
 
-    if partial_path.is_empty() {
+    // An account is a leaf of the state trie even when its partial path is
+    // empty, so only a branch that holds no account is emitted bare.
+    if partial_path.is_empty() && !(is_account && value_bytes.is_some()) {
         return smallvec![inner_bytes];
     }
 
@@ -161,13 +163,16 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
         out.push(inner_bytes);
         out
     } else {
-        // Inline form: the inner bytes fit (or this is an account, which
-        // the Ethereum hasher always inlines). Mirroring the hasher here:
-        // see ethhash.rs:309-320.
-        smallvec![encode_list(&[
-            RlpItem::Bytes(&compact_path),
-            RlpItem::Bytes(&inner_bytes),
-        ])]
+        // Inline form. The inner bytes fit, or this is an account, which the
+        // Ethereum hasher always inlines. This mirrors the extension arm of
+        // `EthHash::write_preimage`. An account's RLP is the leaf value and is
+        // encoded as a byte string, and a short branch is embedded as a list.
+        let inner_item = if is_account {
+            RlpItem::Bytes(&inner_bytes)
+        } else {
+            RlpItem::Raw(&inner_bytes)
+        };
+        smallvec![encode_list(&[RlpItem::Bytes(&compact_path), inner_item])]
     }
 }
 
@@ -409,6 +414,31 @@ mod tests {
         // The hash referenced in the outer must equal keccak(inner).
         let inner_hash = Keccak256::digest(&bytes[1]);
         assert_eq!(outer_fields[1], inner_hash.as_slice());
+    }
+
+    #[test]
+    fn branch_with_partial_path_short_inner_inlines_the_branch_list() {
+        // The root of the trie holding keys 0x01 and 0x02 is an extension
+        // over a branch with two inline leaves. The expected bytes are geth's
+        // encoding, which embeds the 22 byte branch list as is.
+        let mut children = DenseChildren::new();
+        children.insert(
+            PathComponent::ALL[1].0,
+            HashType::Rlp(smallvec![0xc2, 0x20, 0x01]),
+        );
+        children.insert(
+            PathComponent::ALL[2].0,
+            HashType::Rlp(smallvec![0xc2, 0x20, 0x02]),
+        );
+        let node = ProofNode {
+            key: pathbuf_from_nibbles(&[0]),
+            partial_len: 0,
+            value_digest: None,
+            child_hashes: children,
+        };
+        let bytes = proof_node_to_mpt_rlp(&node);
+        let expected = hex::decode("d710d580c22001c220028080808080808080808080808080").unwrap();
+        assert_eq!(bytes.as_slice(), [expected.into_boxed_slice()]);
     }
 
     fn build_account_rlp(
