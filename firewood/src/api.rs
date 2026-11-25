@@ -67,16 +67,12 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 /// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
-/// Byte budget for the key-value pairs or batch operations that range and
-/// change proof generation collects. Each item is counted as the proof body
-/// encodes it: its key and value with their length prefixes, plus a batch
-/// operation's tag byte. Generation stops before an item that would take the
-/// total past this budget, whatever the caller's limit. The first item is
-/// always kept, so every proof makes progress. The caller resumes after the
-/// last key in the proof.
-///
-/// The budget leaves room for the boundary proofs within the body size that
-/// decoders accept (see [`ProofError::BodyTooLarge`]).
+/// Byte budget for the items in a generated range or change proof, counted as
+/// the proof body encodes them. Generation stops before the item that would
+/// take the total past this budget. It always keeps the first item, so a
+/// caller that resumes after the last key in each proof makes progress. The
+/// rest of the body cap (see [`ProofError::BodyTooLarge`]) leaves room for the
+/// boundary proofs.
 pub const PROOF_GENERATION_BUDGET: usize = crate::proofs::MAX_DECOMPRESSED_LEN - 1024 * 1024;
 
 /// The most key-value pairs or batch operations a serialized range or change
@@ -421,9 +417,9 @@ pub trait DbView {
     ///
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
-    /// * `limit` - The maximum number of keys in the range proof. Whatever the
-    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
-    ///   [`MAX_PROOF_ITEMS`] keys.
+    /// * `limit` - The maximum number of keys in the range proof. The proof can
+    ///   stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`]
+    ///   keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof<K: KeyType>(
         &self,
@@ -500,9 +496,9 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// * `first_key` - If None, start at the lowest key
     /// * `last_key` - If None, continue to the end of the database
-    /// * `limit` - The maximum number of keys in the range proof. Whatever the
-    ///   limit, generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
-    ///   [`MAX_PROOF_ITEMS`] keys.
+    /// * `limit` - The maximum number of keys in the range proof. The proof can
+    ///   stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`]
+    ///   keys.
     #[expect(clippy::missing_errors_doc)]
     fn range_proof(
         &self,

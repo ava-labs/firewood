@@ -606,9 +606,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
                     unfixable.push((error, None));
                 }
                 Some(StoredAreaParent::FreeList(free_list_parent)) => {
-                    if let Err(e) =
-                        self.truncate_free_list(header.free_lists_mut(), free_list_parent)
-                    {
+                    if let Err(e) = self.truncate_free_list(header, free_list_parent) {
                         unfixable.push((error, Some(e)));
                     } else {
                         fixed.push(error);
@@ -1211,6 +1209,52 @@ mod test {
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (_, free_list_errors) =
             immutable_proposal.visit_freelist(header.free_lists(), &mut visited, None);
+        assert_eq!(free_list_errors, vec![]);
+    }
+
+    #[hash_mode]
+    #[test]
+    fn fix_freelist_persists_header<H: HashMode>() {
+        // Write free lists with a corrupt head and a corrupt interior link, and flush the
+        // header that references them.
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let TestFreelist {
+            high_watermark,
+            free_ranges: _,
+            errors,
+            stats,
+            mut header,
+        } = gen_test_freelist_with_errors(&nodestore);
+
+        // Repair both errors.
+        let fix_report = nodestore
+            .fix(
+                &mut header,
+                CheckerReport {
+                    errors,
+                    db_stats: DBStats {
+                        high_watermark,
+                        trie_stats: TrieStats::default(),
+                        free_list_stats: stats,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(fix_report.unfixable.len(), 0);
+
+        // Read the header back from storage and check that the free lists
+        // it references have no errors, so both repairs reached disk.
+        let mut on_disk_header = bytemuck::zeroed::<NodeStoreHeader>();
+        std::io::Read::read_exact(
+            &mut nodestore.storage().stream_from(0).unwrap(),
+            bytemuck::bytes_of_mut(&mut on_disk_header),
+        )
+        .unwrap();
+        let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
+        let (_, free_list_errors) =
+            nodestore.visit_freelist(on_disk_header.free_lists(), &mut visited, None);
         assert_eq!(free_list_errors, vec![]);
     }
 

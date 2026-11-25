@@ -728,9 +728,7 @@ typedef struct CreateChangeProofArgs {
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, the caller sets no count limit.
-   *
-   * Whatever `max_length` is, generation also stops at
+   * `0`, the caller sets no count limit. The proof can stop earlier at
    * [`firewood::api::PROOF_GENERATION_BUDGET`] bytes or
    * [`firewood::api::MAX_PROOF_ITEMS`] entries.
    */
@@ -829,9 +827,7 @@ typedef struct CreateRangeProofArgs {
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, the caller sets no count limit.
-   *
-   * Whatever `max_length` is, generation also stops at
+   * `0`, the caller sets no count limit. The proof can stop earlier at
    * [`firewood::api::PROOF_GENERATION_BUDGET`] bytes or
    * [`firewood::api::MAX_PROOF_ITEMS`] entries.
    */

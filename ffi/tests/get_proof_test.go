@@ -206,6 +206,47 @@ func TestEthGetProofAccountInclusionAndExclusion(t *testing.T) {
 	}
 }
 
+// TestEthGetProofAbsentAccountSharingAPrefix asks for a key that differs from a
+// present account's key only in the last nibble. No branch separates the two,
+// so the proof walk ends at the present account, and the answer must still be
+// the absent-account shape.
+func TestEthGetProofAbsentAccountSharingAPrefix(t *testing.T) {
+	present := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	other := common.HexToAddress("0x00000000000000000000000000000000000000b2")
+	slotKey := common.HexToHash("0x01")
+
+	built := buildState(t, []accountSpec{
+		{addr: present, slots: []slot{{key: slotKey, val: common.HexToHash("0x1111")}}},
+		{addr: other},
+	})
+	root := common.Hash(built.root)
+
+	presentHash := crypto.Keccak256Hash(present[:])
+	absentHash := presentHash
+	absentHash[31] ^= 0x01
+	slotHash := crypto.Keccak256Hash(slotKey[:])
+
+	for _, prover := range proversAtRoot(t, built) {
+		t.Run(fmt.Sprintf("%T", prover), func(t *testing.T) {
+			r := require.New(t)
+
+			proof, err := prover.EthGetProof(absentHash[:], [][]byte{slotHash[:]})
+			r.NoError(err)
+			r.Nil(verifyProof(t, root, absentHash[:], proof.AccountProof))
+
+			r.Zero(proof.Nonce)
+			r.Equal([32]byte{}, proof.Balance)
+			r.Equal(types.EmptyRootHash, common.Hash(proof.StorageHash))
+			r.Equal(types.EmptyCodeHash, common.Hash(proof.CodeHash))
+
+			r.Len(proof.StorageProof, 1)
+			r.Equal([32]byte(slotHash), proof.StorageProof[0].Key)
+			r.Nil(proof.StorageProof[0].Value)
+			r.Empty(proof.StorageProof[0].Proof)
+		})
+	}
+}
+
 func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
 	addr := common.HexToAddress("0x00000000000000000000000000000000000000c3")
 	slots := []slot{

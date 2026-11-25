@@ -1626,12 +1626,10 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     Ok(())
 }
 
-/// Collects items from `iter` until there are `limit` or [`MAX_PROOF_ITEMS`] of
-/// them, the next item would take their total `size` past `budget` bytes, or
-/// `iter` ends. An item it does not take stays in `iter`. It always takes the
-/// first item, so a caller paging through a range makes progress even when one
-/// item is larger than the budget. If `iter` yields an error among the items it
-/// takes, it returns that error.
+/// Takes up to `limit` items from `iter`, stopping before the item that would
+/// take their total `size` past `budget`. It never takes more than
+/// [`MAX_PROOF_ITEMS`]. It always takes the first item and leaves the rest in
+/// `iter`. If it reaches an error, it returns that error.
 fn collect_within_budget<T, E>(
     iter: &mut Peekable<impl Iterator<Item = Result<T, E>>>,
     limit: Option<NonZeroUsize>,
@@ -1643,22 +1641,18 @@ fn collect_within_budget<T, E>(
         .min(MAX_PROOF_ITEMS);
     let mut items = Vec::new();
     let mut bytes = 0usize;
-    while items.len() < max_items {
-        let next_bytes = match iter.peek() {
-            None => break,
-            Some(Ok(item)) => bytes.saturating_add(size(item)),
-            Some(Err(_)) => bytes,
-        };
-        if !items.is_empty() && next_bytes > budget {
-            break;
-        }
-        let Some(item) = iter.next().transpose()? else {
-            break;
-        };
-        bytes = next_bytes;
+    while items.len() < max_items
+        && let Some(item) = iter.next_if(|next| {
+            next.as_ref().map_or(true, |item| {
+                items.is_empty() || bytes.saturating_add(size(item)) <= budget
+            })
+        })
+    {
+        let item = item?;
+        bytes = bytes.saturating_add(size(&item));
         items.push(item);
     }
-    Ok(items.into_boxed_slice())
+    Ok(items.into())
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -1755,8 +1749,8 @@ impl<T: TrieReader> Merkle<T> {
     /// * `limit` - Optional maximum number of key-value pairs to include in the proof.
     ///   - If `Some(n)`, at most n key-value pairs will be included
     ///   - If `None`, the caller sets no count limit
-    ///   - The proof may hold fewer pairs, because generation also stops at
-    ///     [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`] pairs.
+    ///   - The proof can stop earlier at [`PROOF_GENERATION_BUDGET`] bytes or
+    ///     [`MAX_PROOF_ITEMS`] pairs
     ///   - Useful for paginating through large ranges
     ///
     /// # Returns
@@ -1821,8 +1815,6 @@ impl<T: TrieReader> Merkle<T> {
             .stop_after_key(end_key)
             .peekable();
 
-        // don't consume the iterator so we can determine if collection stopped
-        // early or exhausted the iterator later
         let key_values = collect_within_budget(&mut iter, limit, budget, key_value_encoded_len)?;
 
         if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
@@ -1831,13 +1823,10 @@ impl<T: TrieReader> Merkle<T> {
         }
 
         let end_proof = if iter.next().transpose()?.is_some() {
-            // collection stopped at the limit, the byte budget or MAX_PROOF_ITEMS
-            // and there is at least one more key, so the end proof is for the last
-            // key provided
+            // more keys remain: prove the last key returned
             key_values.last().map(|(largest_key, _)| &**largest_key)
         } else {
-            // every key in the range was collected, so the end proof is for the
-            // requested end key to prove we have all keys up to that key
+            // range exhausted: prove the requested end key
             end_key
         }
         .map(|end_key| self.prove(end_key))
@@ -1983,9 +1972,8 @@ impl<T: TrieReader> Merkle<T> {
 impl<T: HashedNodeReader> Merkle<T> {
     /// Generate a change proof
     ///
-    /// The proof holds at most `limit` batch operations. Whatever the limit,
-    /// generation also stops at [`PROOF_GENERATION_BUDGET`] bytes or
-    /// [`MAX_PROOF_ITEMS`] operations.
+    /// The proof holds at most `limit` batch operations and can stop earlier at
+    /// [`PROOF_GENERATION_BUDGET`] bytes or [`MAX_PROOF_ITEMS`] operations.
     ///
     /// # Errors
     ///
@@ -2048,31 +2036,20 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         // Create a difference iterator between the two tries with the given start
         // key and end key.
-        let iter_stop_key: Key = end_key.unwrap_or_default().into();
         let mut iter = DiffMerkleNodeStream::new(
             source_trie,
             self.nodestore(),
             start_key.unwrap_or_default().into(),
         )?
         .map_while(|op| match op {
-            Ok(op) => {
-                if iter_stop_key.is_empty() || op.key() <= &iter_stop_key {
-                    Some(Ok(op))
-                } else {
-                    None
-                }
-            }
+            Ok(op) => end_key
+                .is_none_or(|end| **op.key() <= *end)
+                .then_some(Ok(op)),
             Err(e) => Some(Err(e)),
         })
         .peekable();
 
-        // Create an array of `BatchOp`s representing the difference between the two
-        // revisions. The size of the array is bounded by `limit`, by the byte
-        // budget and by MAX_PROOF_ITEMS.
         let batch_ops = collect_within_budget(&mut iter, limit, budget, batch_op_encoded_len)?;
-
-        // Check whether the limit, the byte budget or MAX_PROOF_ITEMS cut off
-        // remaining items.
         let truncated = iter.next().transpose()?.is_some();
 
         // When collection was cut off, the end proof is for the last key in

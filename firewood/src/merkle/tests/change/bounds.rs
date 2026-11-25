@@ -111,3 +111,25 @@ fn test_generator_uses_end_key_for_complete_proof<H: HashMode>() {
         .value_digest(b"\xff", &root2, H::ALGORITHM)
         .unwrap();
 }
+
+#[hash_mode]
+#[test]
+fn test_empty_end_key_bounds_the_proof<H: HashMode>() {
+    let (source, _dir_source) = setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (target, _dir_target) = setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(source, [(b"\x10", b"changed")]);
+    let empty_end_key: Option<&[u8]> = Some(b"");
+
+    let expected_empty_proof = source
+        .change_proof(root1, root2.clone(), None, empty_end_key, None)
+        .unwrap();
+    assert!(
+        expected_empty_proof.batch_ops().is_empty(),
+        "{:?}",
+        expected_empty_proof.batch_ops()
+    );
+
+    target
+        .verify_change_proof(&expected_empty_proof, root2, None, empty_end_key, None)
+        .unwrap();
+}

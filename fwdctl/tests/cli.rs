@@ -666,6 +666,33 @@ fn fwdctl_check_empty_db<H: HashMode>() {
 
 #[hash_mode]
 #[test]
+fn fwdctl_check_fix_requires_the_database_lock<H: HashMode>() {
+    with_tmpdir(|db_path| {
+        create_db(db_path, H::ALGORITHM);
+
+        let db_file = fs::File::open(db_path.join("firewood.db")).unwrap();
+        db_file.try_lock().unwrap();
+
+        cargo_bin_cmd!()
+            .arg("check")
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        cargo_bin_cmd!()
+            .arg("check")
+            .arg("--db")
+            .arg(db_path)
+            .arg("--fix")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unable to obtain advisory lock"));
+    });
+}
+
+#[hash_mode]
+#[test]
 fn test_slow_fwdctl_check_db_with_data<H: HashMode>() {
     use rand::RngExt;
     use rand::distr::Alphanumeric;

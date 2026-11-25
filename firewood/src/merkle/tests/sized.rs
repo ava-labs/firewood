@@ -742,9 +742,9 @@ fn assert_well_filled<P>(chunks: &[SizedProof<P>], budget: usize) {
 }
 
 /// The wire decodes, verifies against the root, and is byte-equal to the
-/// plain range proof of the same length. The plain proof is built with its
-/// byte budget off, because a chunk of compressible values can hold more than
-/// that budget.
+/// plain range proof of the same length. The plain proof's byte budget is off
+/// because a chunk of compressible values can exceed it, as in
+/// `test_sized_constant_values_stay_decodable`.
 fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
     merkle: &Merkle<T>,
     start: Option<&[u8]>,
@@ -774,9 +774,8 @@ fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
 }
 
 /// The wire decodes, verifies against the target root, and is byte-equal
-/// to the plain change proof of the same length. The plain proof is built
-/// with its byte budget off, because a chunk of compressible values can hold
-/// more than that budget.
+/// to the plain change proof of the same length, built as in
+/// [`verify_range_chunk`].
 fn verify_change_chunk<T: HashedNodeReader>(
     target: &Merkle<T>,
     source: &Merkle<T>,
