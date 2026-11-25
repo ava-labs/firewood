@@ -1768,7 +1768,7 @@ mod tests {
             let branch1 = Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
                 value: None,
-                children,
+                children: children.into(),
             }));
 
             let mut children = Children::new();
@@ -1783,7 +1783,7 @@ mod tests {
             let branch2 = Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
                 value: None,
-                children,
+                children: children.into(),
             }));
 
             let mut children = Children::new();
@@ -1793,7 +1793,7 @@ mod tests {
             *root = Some(Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
                 value: None,
-                children,
+                children: children.into(),
             })));
         }
 
@@ -2004,7 +2004,7 @@ mod tests {
                     node = Node::Branch(Box::new(BranchNode {
                         partial_path: Path::new(),
                         value: None,
-                        children,
+                        children: children.into(),
                     }));
                 }
 
@@ -2039,7 +2039,7 @@ mod tests {
         recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
             partial_path: Path::new(),
             value: None,
-            children,
+            children: children.into(),
         })));
 
         let reconstructed: NodeStore<Reconstructed<_, H>, _, H> = recon.into();

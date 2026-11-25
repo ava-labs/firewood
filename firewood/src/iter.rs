@@ -269,7 +269,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                         ),
                     });
 
-                    let child = &branch.children[next_unmatched_key_nibble];
+                    let child = branch.children.get(next_unmatched_key_nibble);
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
@@ -490,7 +490,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 let next_unmatched_key_nibble =
                     PathComponent::try_new(next_unmatched_key_nibble).expect("valid nibble");
 
-                let child = &branch.children[next_unmatched_key_nibble];
+                let child = branch.children.get(next_unmatched_key_nibble);
                 match child {
                     None => {
                         // There's no child at the index of the next nibble in the key.
@@ -589,11 +589,7 @@ where
 fn as_enumerated_children_iter(
     branch: &BranchNode,
 ) -> impl Iterator<Item = (PathComponent, Child)> + use<> {
-    branch
-        .children
-        .clone()
-        .into_iter()
-        .filter_map(|(pos, child)| child.map(|child| (pos, child)))
+    branch.children.clone().into_iter()
 }
 
 pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
