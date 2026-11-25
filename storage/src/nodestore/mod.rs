@@ -276,28 +276,30 @@ impl<S: ReadableStorage, H> NodeStore<Committed, S, H> {
 pub trait Parentable {
     /// Returns the parent of this nodestore.
     fn as_nodestore_parent(&self) -> NodeStoreParent;
+    /// Returns the root of this nodestore as a [`Child`]
+    fn root_as_child(&self) -> Option<&Child>;
     /// Returns the root hash of this nodestore. This works because all parentable nodestores have a hash
-    fn root_hash(&self) -> Option<TrieHash>;
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.root_as_child()
+            .and_then(Child::hash)
+            .map(TrieHash::from)
+    }
     /// Returns the root node
-    fn root(&self) -> Option<MaybePersistedNode>;
+    fn root(&self) -> Option<MaybePersistedNode> {
+        self.root_as_child().map(Child::as_maybe_persisted_node)
+    }
     /// Returns the persisted address of the root node, if any.
-    fn root_address(&self) -> Option<LinearAddress>;
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root_as_child().and_then(Child::persisted_address)
+    }
 }
 
 impl Parentable for Arc<ImmutableProposal> {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
         NodeStoreParent::Proposed(Arc::clone(self))
     }
-    fn root_hash(&self) -> Option<TrieHash> {
-        self.root
-            .as_ref()
-            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
-    }
-    fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
-    }
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root.as_ref().and_then(Child::persisted_address)
+    fn root_as_child(&self) -> Option<&Child> {
+        self.root.as_ref()
     }
 }
 
@@ -319,23 +321,12 @@ impl<S, H> NodeStore<Arc<ImmutableProposal>, S, H> {
 impl Parentable for Committed {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
         NodeStoreParent::Committed {
-            hash: self
-                .root
-                .as_ref()
-                .and_then(|root| root.hash().cloned().map(HashType::into_triehash)),
+            hash: self.root_hash(),
             id: self.id,
         }
     }
-    fn root_hash(&self) -> Option<TrieHash> {
-        self.root
-            .as_ref()
-            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
-    }
-    fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
-    }
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root.as_ref().and_then(Child::persisted_address)
+    fn root_as_child(&self) -> Option<&Child> {
+        self.root.as_ref()
     }
 }
 
@@ -1148,6 +1139,29 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     #[must_use]
     pub fn committed_parent_hash(&self) -> CommittedParentHash {
         self.kind.committed_parent_hash()
+    }
+
+    /// Returns this proposal with `parent`'s root in place of its own when the
+    /// two have the same root hash, and unchanged otherwise.
+    ///
+    /// Such a proposal never becomes a revision, so any node it replaced would
+    /// be on a deleted list that nothing consumes. Sharing the root leaves that
+    /// list empty, and a child of the proposal replaces `parent`'s nodes itself.
+    #[must_use]
+    pub fn share_unchanged_root<F: Parentable>(mut self, parent: &NodeStore<F, S, H>) -> Self {
+        // An empty trie has no root to share, so both roots must be present.
+        // Equal hashes then mean the two tries are the same.
+        if let Some(hash) = self.kind.root.as_ref().and_then(Child::hash)
+            && let Some(parent_root) = parent.kind.root_as_child()
+            && parent_root.hash() == Some(hash)
+        {
+            self.kind = Arc::new(ImmutableProposal {
+                deleted: Box::default(),
+                parent: Arc::clone(&self.kind.parent),
+                root: Some(parent_root.clone()),
+            });
+        }
+        self
     }
 
     /// Returns a fresh, empty committed view sharing this proposal's storage.
