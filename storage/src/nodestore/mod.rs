@@ -1141,6 +1141,29 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
         self.kind.committed_parent_hash()
     }
 
+    /// Returns this proposal with `parent`'s root in place of its own when the
+    /// two have the same root hash, and unchanged otherwise.
+    ///
+    /// Such a proposal never becomes a revision, so any node it replaced would
+    /// be on a deleted list that nothing consumes. Sharing the root leaves that
+    /// list empty, and a child of the proposal replaces `parent`'s nodes itself.
+    #[must_use]
+    pub fn share_unchanged_root<F: Parentable>(mut self, parent: &NodeStore<F, S, H>) -> Self {
+        // An empty trie has no root to share, so both roots must be present.
+        // Equal hashes then mean the two tries are the same.
+        if let Some(hash) = self.kind.root.as_ref().and_then(Child::hash)
+            && let Some(parent_root) = parent.kind.root_as_child()
+            && parent_root.hash() == Some(hash)
+        {
+            self.kind = Arc::new(ImmutableProposal {
+                deleted: Box::default(),
+                parent: Arc::clone(&self.kind.parent),
+                root: Some(parent_root.clone()),
+            });
+        }
+        self
+    }
+
     /// Returns a fresh, empty committed view sharing this proposal's storage.
     ///
     /// Intended for diffing against an empty parent in `commit_with_rebase`
