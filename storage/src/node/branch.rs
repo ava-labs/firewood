@@ -276,7 +276,7 @@ impl BranchNode {
         Children::from_fn(|index| {
             self.children
                 .get(index)
-                .and_then(|child| child.hash().cloned())
+                .and_then(|child| child.hash().copied())
         })
     }
 

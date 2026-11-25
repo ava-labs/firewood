@@ -120,7 +120,7 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     pub fn as_ref(&self) -> ValueDigest<&[u8]> {
         match self {
             Self::Value(v) => ValueDigest::Value(v.as_ref()),
-            Self::Hash(h) => ValueDigest::Hash(h.clone()),
+            Self::Hash(h) => ValueDigest::Hash(*h),
         }
     }
 

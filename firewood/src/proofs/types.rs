@@ -600,7 +600,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Err(ProofError::Empty);
         };
 
-        let mut expected_hash = HashType::from(root_hash.clone());
+        let mut expected_hash = HashType::from(*root_hash);
 
         // Indicates whether the current node is hashed as a standalone storage-trie
         // root: set to true one iteration prior to reaching the lone storage child
@@ -656,10 +656,9 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 }
 
                 let children = node.children();
-                expected_hash = children[key_nibble]
+                expected_hash = *children[key_nibble]
                     .as_ref()
-                    .ok_or(ProofError::NodeNotInTrie)?
-                    .clone();
+                    .ok_or(ProofError::NodeNotInTrie)?;
 
                 hash_as_storage_root =
                     node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;

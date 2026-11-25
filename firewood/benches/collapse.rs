@@ -112,7 +112,7 @@ fn bench_collapse<H: HashMode>(criterion: &mut Criterion) {
     let proof = db
         .change_proof(
             start_root,
-            end_root.clone(),
+            end_root,
             Some(first.as_slice()),
             Some(last.as_slice()),
             None,
@@ -124,7 +124,7 @@ fn bench_collapse<H: HashMode>(criterion: &mut Criterion) {
         b.iter(|| {
             db.verify_change_proof(
                 &proof,
-                end_root.clone(),
+                end_root,
                 Some(first.as_slice()),
                 Some(last.as_slice()),
                 None,

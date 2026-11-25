@@ -72,7 +72,7 @@ impl ComparableNodeInfo {
         Ok(Self {
             path: full_path,
             node,
-            hash: child.hash().map(|hash| hash.clone().into_triehash()),
+            hash: child.hash().map(|hash| (*hash).into_triehash()),
         })
     }
 }
@@ -408,7 +408,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             .map(|root| ComparableNodeInfo {
                 path: root.partial_path().clone(),
                 node: root,
-                hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
+                hash: trie.root_hash(),
             })
             .collect();
 
