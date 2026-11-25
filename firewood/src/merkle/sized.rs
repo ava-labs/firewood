@@ -292,8 +292,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
                 .saturating_sub(edges);
             let end = grow_prefix::<B>(&mut items, &mut kept, &mut costs, allowance)?;
             if kept.len() == count && pass > 0 {
-                // Neither the estimate nor MAX_PROOF_ITEMS admits more: the last
-                // probe stands.
+                // Nothing more fits: the last probe stands.
                 break;
             }
             natural_end = end;

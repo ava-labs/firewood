@@ -234,8 +234,7 @@ fn test_sized_constant_values_stay_decodable<H: HashMode>() {
     verify_change_chunk(&target, &source, None, &change);
 }
 
-/// Items so small that more than [`MAX_PROOF_ITEMS`] fit the body limit: a
-/// chunk stops at [`MAX_PROOF_ITEMS`] items, and decoders accept it.
+/// A sized chunk stops at [`MAX_PROOF_ITEMS`] items and still decodes.
 #[hash_mode]
 #[test]
 fn test_sized_chunk_stops_at_max_proof_items<H: HashMode>() {

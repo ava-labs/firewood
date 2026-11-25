@@ -1173,9 +1173,7 @@ fn test_collect_within_budget_returns_the_first_error() {
     assert_eq!(result.map(|kept| kept.len()), Err("first"));
 }
 
-/// [`collect_within_budget`] stops at [`MAX_PROOF_ITEMS`] items when the limit
-/// and the budget would admit more. With exactly that many items, it takes them
-/// all.
+/// [`collect_within_budget`] takes at most [`MAX_PROOF_ITEMS`] items.
 #[test_case(MAX_PROOF_ITEMS + 1, None => (MAX_PROOF_ITEMS, Some(0)) ; "no limit")]
 #[test_case(MAX_PROOF_ITEMS + 1, Some(MAX_PROOF_ITEMS + 1) => (MAX_PROOF_ITEMS, Some(0)) ; "limit above MAX_PROOF_ITEMS")]
 #[test_case(MAX_PROOF_ITEMS, None => (MAX_PROOF_ITEMS, None) ; "exactly MAX_PROOF_ITEMS items")]
@@ -1186,9 +1184,7 @@ fn test_collect_within_budget_stops_at_max_proof_items(
     collect_sizes(&vec![0; items], limit, usize::MAX)
 }
 
-/// With no limit, range and change proofs over more than [`MAX_PROOF_ITEMS`]
-/// small items stop at [`MAX_PROOF_ITEMS`] items, although more would fit the
-/// byte budget. Each proof serializes, decodes and verifies.
+/// Range and change proofs stop at [`MAX_PROOF_ITEMS`] items and still decode.
 #[hash_mode]
 #[test]
 fn test_proof_generation_stops_at_max_proof_items<H: HashMode>() {

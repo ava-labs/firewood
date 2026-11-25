@@ -2093,8 +2093,7 @@ fn test_proof_item_count_bound<H: HashMode>(count: usize, accepted: bool) {
             .collect(),
         H::ALGORITHM,
     );
-    // Frame the body directly, because `write_to_vec` refuses a proof over the
-    // bound.
+    // `write_to_vec` refuses a proof over the bound, so frame the body directly.
     let mut body = Vec::new();
     range.write_body_to_vec(&mut body);
     let mut data = Vec::new();
@@ -2130,9 +2129,7 @@ fn test_proof_item_count_bound<H: HashMode>(count: usize, accepted: bool) {
     );
 }
 
-/// `write_to_vec` serializes a proof with [`MAX_PROOF_ITEMS`] key-value pairs
-/// or batch operations, and refuses one with more, which decoders would reject.
-/// It leaves `out` untouched when it refuses.
+/// `write_to_vec` takes [`MAX_PROOF_ITEMS`] items and refuses one more.
 #[test_case(MAX_PROOF_ITEMS, true ; "at the bound")]
 #[test_case(MAX_PROOF_ITEMS + 1, false ; "one item over")]
 fn test_write_to_vec_item_count_bound(count: usize, accepted: bool) {

@@ -130,8 +130,7 @@ impl FrozenChangeProof {
     ///
     /// # Errors
     ///
-    /// Errors as [`FrozenRangeProof::write_to_vec`], with batch operations in
-    /// place of key-value pairs.
+    /// Errors as [`FrozenRangeProof::write_to_vec`].
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         check_item_count(self.batch_ops().len())?;
         let mut body = Vec::new();
@@ -170,8 +169,7 @@ pub(crate) fn write_framed_body(
     result
 }
 
-/// Rejects a proof with more key-value pairs or batch operations than decoders
-/// accept.
+/// Rejects a proof with more items than decoders accept.
 const fn check_item_count(count: usize) -> Result<(), ProofError> {
     if count > MAX_PROOF_ITEMS {
         return Err(ProofError::ProofIsLargerThanMaxLength);
