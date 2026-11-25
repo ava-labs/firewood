@@ -83,8 +83,6 @@ use std::num::NonZeroU64;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use firewood_metrics::firewood_counter;
@@ -781,13 +779,6 @@ pub enum CommittedParentHash {
 pub struct ImmutableProposal {
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[MaybePersistedNode]>,
-    /// Nodes deleted by ancestor proposals that committed through the trivial
-    /// path. Such an ancestor is dropped instead of becoming a revision, so
-    /// the nodes it replaced are freed with this proposal's revision.
-    inherited: parking_lot::Mutex<Vec<MaybePersistedNode>>,
-    /// Set when this proposal commits through the trivial path, so that
-    /// [`Self::commit_reparent`] hands its deleted nodes to its children.
-    absorbed: AtomicBool,
     /// The parent of this proposal.
     parent: Arc<parking_lot::Mutex<NodeStoreParent>>,
     /// The root of the trie in this proposal.
@@ -835,11 +826,6 @@ impl ImmutableProposal {
         if let NodeStoreParent::Proposed(ref parent) = *guard
             && Arc::ptr_eq(parent, committing)
         {
-            if committing.absorbed.load(Ordering::Acquire) {
-                let mut inherited = self.inherited.lock();
-                inherited.extend(committing.deleted.iter().cloned());
-                inherited.extend(committing.inherited.lock().iter().cloned());
-            }
             *guard = NodeStoreParent::Committed {
                 hash: committing.root_hash(),
                 id: new_id,
@@ -1164,11 +1150,29 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
         self.kind.committed_parent_hash()
     }
 
-    /// Records that this proposal committed through the trivial path, which
-    /// drops it instead of making it a revision. Its children inherit its
-    /// deleted nodes when they are reparented.
-    pub fn mark_absorbed(&self) {
-        self.kind.absorbed.store(true, Ordering::Release);
+    /// Returns this proposal with `parent`'s root in place of its own when the
+    /// two have the same root hash, and unchanged otherwise.
+    ///
+    /// Such a proposal never becomes a revision, so any node it replaced would
+    /// be on a deleted list that nothing consumes. Sharing the root leaves that
+    /// list empty, and a child of the proposal replaces `parent`'s nodes itself.
+    #[must_use]
+    pub fn share_unchanged_root<F: Parentable>(mut self, parent: &NodeStore<F, S, H>) -> Self {
+        if self.kind.root_hash() != parent.kind.root_hash() {
+            return self;
+        }
+        let root = match (&self.kind.root, parent.kind.root()) {
+            (Some(Child::MaybePersisted(_, hash)), Some(root)) => {
+                Some(Child::MaybePersisted(root, hash.clone()))
+            }
+            _ => return self,
+        };
+        self.kind = Arc::new(ImmutableProposal {
+            deleted: Box::default(),
+            parent: Arc::clone(&self.kind.parent),
+            root,
+        });
+        self
     }
 
     /// Returns a fresh, empty committed view sharing this proposal's storage.
@@ -1191,13 +1195,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     pub fn as_committed(&self) -> NodeStore<Committed, S, H> {
         NodeStore {
             kind: Committed {
-                deleted: self
-                    .kind
-                    .deleted
-                    .iter()
-                    .chain(self.kind.inherited.lock().iter())
-                    .cloned()
-                    .collect(),
+                deleted: self.kind.deleted.clone(),
                 root: self.kind.root.clone(),
                 id: CommittedId::next(),
             },
@@ -1230,8 +1228,6 @@ impl<S: ReadableStorage, H: HashMode> TryFrom<NodeStore<Mutable<Propose>, S, H>>
         let mut nodestore = NodeStore {
             kind: Arc::new(ImmutableProposal {
                 deleted: deleted.into(),
-                inherited: parking_lot::Mutex::default(),
-                absorbed: AtomicBool::new(false),
                 parent: Arc::new(parking_lot::Mutex::new(parent)),
                 root: None,
             }),
@@ -1253,8 +1249,6 @@ impl<S: ReadableStorage, H: HashMode> TryFrom<NodeStore<Mutable<Propose>, S, H>>
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
         nodestore.kind = Arc::new(ImmutableProposal {
             deleted: immutable_proposal.deleted,
-            inherited: immutable_proposal.inherited,
-            absorbed: immutable_proposal.absorbed,
             parent: immutable_proposal.parent,
             root: Some(Child::MaybePersisted(root, root_hash)),
         });

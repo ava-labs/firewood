@@ -402,8 +402,9 @@ impl<H: HashMode> Db<H> {
         let mutable_nodestore = self
             .manager
             .apply_batch(&self.use_parallel, proposal, batch)?;
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>> =
-            Arc::new(mutable_nodestore.try_into()?);
+        let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, H> =
+            mutable_nodestore.try_into()?;
+        let immutable = Arc::new(immutable.share_unchanged_root(parent));
         self.manager.add_proposal(immutable.clone());
 
         firewood_histogram!(PROPOSE_DURATION_SECONDS).record(propose_start.elapsed().as_secs_f64());

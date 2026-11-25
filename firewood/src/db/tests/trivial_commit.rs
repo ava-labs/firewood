@@ -100,11 +100,9 @@ fn assert_leaks_like<H: HashMode>(direct: &[Op], workload: impl FnOnce(&TestDb<H
     assert_eq!(leaked_after::<H>(workload), expected);
 }
 
-/// A proposal whose root hash equals its parent's commits through the trivial
-/// path, which drops it along with its deleted list. A child proposal built
-/// on it is reparented onto the current revision, but the nodes of that
-/// revision the dropped proposal had replaced are on no deleted list. Once
-/// the revision ages out their areas are neither reachable nor free.
+/// A proposal that changes nothing commits through the trivial path and never
+/// becomes a revision, so its child is the one that has to replace the nodes
+/// of the current revision.
 #[hash_mode]
 #[test]
 fn test_trivial_commit_with_child_frees_replaced_nodes<H: HashMode>() {
@@ -116,8 +114,8 @@ fn test_trivial_commit_with_child_frees_replaced_nodes<H: HashMode>() {
     });
 }
 
-/// Both children inherit the same nodes, and only the one that commits on the
-/// current revision frees them.
+/// Both children replace nodes of the same revision, and the rebased one must
+/// not free them a second time.
 #[hash_mode]
 #[test]
 fn test_trivial_commit_with_two_children_and_a_rebase<H: HashMode>() {
@@ -131,8 +129,8 @@ fn test_trivial_commit_with_two_children_and_a_rebase<H: HashMode>() {
     });
 }
 
-/// Inherited nodes pass through a second trivial commit, and a sibling that
-/// holds some of the same nodes frees nothing when its commit is rejected.
+/// Two proposals in a row change nothing, and a sibling between them frees
+/// nothing when its commit is rejected.
 #[hash_mode]
 #[test]
 fn test_trivial_commit_chain_with_a_rejected_sibling<H: HashMode>() {
@@ -151,8 +149,8 @@ fn test_trivial_commit_chain_with_a_rejected_sibling<H: HashMode>() {
     });
 }
 
-/// The nodes a rebased child inherited belong to a revision that a commit in
-/// between has already replaced, so the rebase frees none of them.
+/// The child replaced nodes of a revision that a commit in between has already
+/// replaced, so rebasing it must not free them.
 #[hash_mode]
 #[test]
 fn test_trivial_commit_child_rebased_over_a_sibling<H: HashMode>() {
@@ -163,5 +161,21 @@ fn test_trivial_commit_child_rebased_over_a_sibling<H: HashMode>() {
         absorbed.commit().unwrap();
         sibling.commit().unwrap();
         child.commit_with_rebase().unwrap();
+    });
+}
+
+/// A batch that writes values the trie already holds replaces nodes below the
+/// root as well.
+#[hash_mode]
+#[test]
+fn test_trivial_commit_of_a_batch_that_rewrites_values<H: HashMode>() {
+    assert_leaks_like::<H>(&[put(0xaa, 0)], |db| {
+        let same = (0u8..32)
+            .map(|i| put(i.wrapping_mul(37), i))
+            .collect::<Vec<_>>();
+        let absorbed = db.propose(same).unwrap();
+        let child = absorbed.propose(vec![put(0xaa, 0)]).unwrap();
+        absorbed.commit().unwrap();
+        child.commit().unwrap();
     });
 }
