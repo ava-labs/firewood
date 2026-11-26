@@ -7,7 +7,6 @@ use std::rc::Rc;
 
 use metrics::Key;
 use metrics::Label;
-use metrics::with_local_recorder;
 use metrics_util::debugging::DebugValue;
 use metrics_util::debugging::DebuggingRecorder;
 use rand::Rng;
@@ -199,7 +198,7 @@ impl Deref for TestRecorder {
 impl TestRecorder {
     /// Execute test function with this recorder set as the local recorder.
     pub fn with_local_recorder<F: Fn()>(&self, f: F) {
-        with_local_recorder(&**self, f);
+        firewood_metrics::with_local_recorder(&**self, f);
     }
 
     /// Returns the counter value for the given key and label.

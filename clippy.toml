@@ -14,6 +14,8 @@ doc-valid-idents = [
 
 disallowed-methods = [
   { path = "rand::rng", replacement = "firewood_storage::SeededRng::from_env_or_random", reason = "use a prng with a user-defined seed instead", allow-invalid = true },
+  { path = "metrics::with_local_recorder", replacement = "firewood_metrics::with_local_recorder", reason = "cached Firewood metric handles are invalidated only when the local recorder is installed through firewood_metrics", allow-invalid = true },
+  { path = "metrics::set_default_local_recorder", reason = "cached Firewood metric handles are invalidated only when the local recorder is installed through firewood_metrics::with_local_recorder", allow-invalid = true },
   { path = "std::os::unix::fs::FileExt::write_at", replacement = "write_all_at", reason = "use write_all_at instead of write_at to handle short writes ensuring the entire buffer is written", allow-invalid = true },
   # Out-of-bounds index panics
   { path = "slice::split_at", reason = "split_at panics on out-of-bounds index; verify the index is in bounds and add #[expect] with a reason", allow-invalid = true },
