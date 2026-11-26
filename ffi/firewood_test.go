@@ -1456,6 +1456,10 @@ func TestNilVsEmptyValue(t *testing.T) {
 	r.Empty(got, "key4 should have empty value")
 }
 
+func TestIntoErrorWithoutMessage(t *testing.T) {
+	require.Error(t, (&ownedBytes{}).intoError())
+}
+
 // TestDeleteKeyWithChildren verifies that deleting a key that has children (keys
 // that are extensions of it) does not delete the children. This is to ensure
 // Delete doesn't do prefix delete.

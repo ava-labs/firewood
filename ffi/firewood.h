@@ -87,6 +87,8 @@ typedef struct HashKey {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_u8 {
   uint8_t *ptr;
@@ -937,6 +939,8 @@ typedef struct ProposalResult {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedBytes {
   OwnedBytes *ptr;
@@ -967,6 +971,8 @@ typedef struct EthStorageProofOwned {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_EthStorageProofOwned {
   struct EthStorageProofOwned *ptr;
@@ -1122,6 +1128,8 @@ typedef struct OwnedKeyValuePair {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedKeyValuePair {
   struct OwnedKeyValuePair *ptr;
@@ -1146,6 +1154,8 @@ typedef struct OwnedLabelPair {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedLabelPair {
   struct OwnedLabelPair *ptr;
@@ -1165,6 +1175,8 @@ typedef struct OwnedQuantile {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedQuantile {
   struct OwnedQuantile *ptr;
@@ -1193,6 +1205,8 @@ typedef struct OwnedBucket {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedBucket {
   struct OwnedBucket *ptr;
@@ -1221,6 +1235,8 @@ typedef struct OwnedBucketSpan {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedBucketSpan {
   struct OwnedBucketSpan *ptr;
@@ -1232,6 +1248,8 @@ typedef struct OwnedSlice_OwnedBucketSpan {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_i64 {
   int64_t *ptr;
@@ -1308,6 +1326,8 @@ typedef struct OwnedMetric {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedMetric {
   struct OwnedMetric *ptr;
@@ -1328,6 +1348,8 @@ typedef struct OwnedMetricFamily {
  *
  * C callers must free this memory using the respective FFI function for the
  * concrete type (but not using the `free` function from the C standard library).
+ *
+ * `ptr` is NULL if and only if `len` is 0.
  */
 typedef struct OwnedSlice_OwnedMetricFamily {
   struct OwnedMetricFamily *ptr;

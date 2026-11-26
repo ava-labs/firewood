@@ -106,7 +106,7 @@ func gatherFromRust() ([]*dto.MetricFamily, error) {
 }
 
 func convertRenderedMetrics(owned C.OwnedRenderedMetrics) []*dto.MetricFamily {
-	if owned.ptr == nil {
+	if owned.len == 0 {
 		return nil
 	}
 
@@ -121,7 +121,7 @@ func convertRenderedMetrics(owned C.OwnedRenderedMetrics) []*dto.MetricFamily {
 // borrowString will return a new Go string that copies the data from the provided
 // C.OwnedBytes without taking ownership.
 func borrowString(b C.OwnedBytes) string {
-	if b.ptr == nil {
+	if b.len == 0 {
 		return ""
 	}
 	return string(unsafe.Slice((*byte)(b.ptr), b.len))
@@ -139,7 +139,7 @@ func convertMetricFamily(c *C.OwnedMetricFamily) *dto.MetricFamily {
 		mf.Help = new(help)
 	}
 
-	if c.metrics.ptr == nil {
+	if c.metrics.len == 0 {
 		return mf
 	}
 
@@ -180,7 +180,7 @@ func metricTypeFromTag(tag C.OwnedMetricValue_Tag) *dto.MetricType {
 func convertMetric(c *C.OwnedMetric) *dto.Metric {
 	m := &dto.Metric{}
 
-	if c.labels.ptr != nil {
+	if c.labels.len > 0 {
 		cLabels := unsafe.Slice((*C.OwnedLabelPair)(unsafe.Pointer(c.labels.ptr)), c.labels.len)
 		m.Label = make([]*dto.LabelPair, len(cLabels))
 		for i := range cLabels {
@@ -219,7 +219,7 @@ func convertSummary(c *C.OwnedSummary) *dto.Summary {
 		SampleSum:   new(float64(c.sample_sum)),
 	}
 
-	if c.quantiles.ptr != nil {
+	if c.quantiles.len > 0 {
 		cQuantiles := unsafe.Slice((*C.OwnedQuantile)(unsafe.Pointer(c.quantiles.ptr)), c.quantiles.len)
 		s.Quantile = make([]*dto.Quantile, len(cQuantiles))
 		for i := range cQuantiles {
@@ -239,7 +239,7 @@ func convertClassicHistogram(c *C.OwnedClassicHistogram) *dto.Histogram {
 		SampleSum:   new(float64(c.sample_sum)),
 	}
 
-	if c.buckets.ptr != nil {
+	if c.buckets.len > 0 {
 		cBuckets := unsafe.Slice((*C.OwnedBucket)(unsafe.Pointer(c.buckets.ptr)), c.buckets.len)
 		h.Bucket = make([]*dto.Bucket, len(cBuckets))
 		for i := range cBuckets {
@@ -262,7 +262,7 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		ZeroCount:     new(uint64(c.zero_count)),
 	}
 
-	if c.positive_spans.ptr != nil {
+	if c.positive_spans.len > 0 {
 		cSpans := unsafe.Slice((*C.OwnedBucketSpan)(unsafe.Pointer(c.positive_spans.ptr)), c.positive_spans.len)
 		h.PositiveSpan = make([]*dto.BucketSpan, len(cSpans))
 		for i := range cSpans {
@@ -273,7 +273,7 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		}
 	}
 
-	if c.positive_deltas.ptr != nil {
+	if c.positive_deltas.len > 0 {
 		cDeltas := unsafe.Slice((*C.int64_t)(unsafe.Pointer(c.positive_deltas.ptr)), c.positive_deltas.len)
 		h.PositiveDelta = make([]int64, len(cDeltas))
 		for i := range cDeltas {
@@ -281,7 +281,7 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		}
 	}
 
-	if c.negative_spans.ptr != nil {
+	if c.negative_spans.len > 0 {
 		cSpans := unsafe.Slice((*C.OwnedBucketSpan)(unsafe.Pointer(c.negative_spans.ptr)), c.negative_spans.len)
 		h.NegativeSpan = make([]*dto.BucketSpan, len(cSpans))
 		for i := range cSpans {
@@ -292,7 +292,7 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		}
 	}
 
-	if c.negative_deltas.ptr != nil {
+	if c.negative_deltas.len > 0 {
 		cDeltas := unsafe.Slice((*C.int64_t)(unsafe.Pointer(c.negative_deltas.ptr)), c.negative_deltas.len)
 		h.NegativeDelta = make([]int64, len(cDeltas))
 		for i := range cDeltas {
