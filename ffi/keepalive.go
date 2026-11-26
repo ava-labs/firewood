@@ -58,8 +58,10 @@ type handle[T any] struct {
 // newHandle constructs an inactive handle: the C pointer and free
 // function are set, but the lease is not yet attached to any registry.
 // Callers must invoke [lease.attach] before the handle becomes visible,
-// or the registry's count/dropFn invariants will be broken. Proofs are the
-// exception: they hold no lease until [lease.ensureAttached] binds them.
+// or the registry's count/dropFn invariants will be broken. [RangeProof]
+// holds no lease until [lease.ensureAttached] binds it, and [ChangeProof]
+// never attaches: its lease stays inactive for the handle's whole life and
+// only its mutex is used.
 func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
 	return &handle[T]{
 		ptr:     ptr,
