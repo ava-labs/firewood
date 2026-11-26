@@ -181,8 +181,11 @@ func copyEthProof(owned *C.EthProofOwned) *EthAccountProof {
 		AccountProof: copyOwnedBytesSlice(owned.account_proof),
 	}
 
+	proof.StorageProof = make([]EthStorageProof, owned.storage_proofs.len)
+	if owned.storage_proofs.len == 0 {
+		return proof
+	}
 	storageProofs := unsafe.Slice(owned.storage_proofs.ptr, owned.storage_proofs.len)
-	proof.StorageProof = make([]EthStorageProof, len(storageProofs))
 	for i := range storageProofs {
 		sp := &storageProofs[i]
 		entry := EthStorageProof{
@@ -201,7 +204,7 @@ func copyEthProof(owned *C.EthProofOwned) *EthAccountProof {
 
 // copyOwnedBytesSlice deep-copies an OwnedSlice<OwnedBytes> into a [][]byte.
 func copyOwnedBytesSlice(slice C.OwnedSlice_OwnedBytes) [][]byte {
-	if slice.ptr == nil || slice.len == 0 {
+	if slice.len == 0 {
 		return nil
 	}
 

@@ -11,6 +11,8 @@ pub type OwnedBytes = OwnedSlice<u8>;
 ///
 /// C callers must free this memory using the respective FFI function for the
 /// concrete type (but not using the `free` function from the C standard library).
+///
+/// `ptr` is NULL if and only if `len` is 0.
 #[derive(Debug)]
 #[repr(C)]
 pub struct OwnedSlice<T> {
@@ -118,6 +120,11 @@ impl<T: Ord> Ord for OwnedSlice<T> {
 
 impl<T> From<Box<[T]>> for OwnedSlice<T> {
     fn from(data: Box<[T]>) -> Self {
+        // An empty box's pointer is dangling, such as 0x1, and the Go runtime
+        // aborts if a stack copy finds such a value in a pointer-typed slot.
+        if data.is_empty() {
+            return Self { ptr: None, len: 0 };
+        }
         let len = data.len();
         let ptr = NonNull::from(Box::leak(data)).cast::<T>();
         Self {
@@ -172,3 +179,13 @@ impl fmt::Display for OwnedBytes {
 unsafe impl<T: Send> Send for OwnedSlice<T> {}
 // SAFETY: described above
 unsafe impl<T: Sync> Sync for OwnedSlice<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_owned_slice_exports_null_pointer() {
+        assert!(OwnedBytes::from(Vec::new()).ptr.is_none());
+    }
+}

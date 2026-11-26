@@ -98,6 +98,34 @@ func TestIter(t *testing.T) {
 	})
 }
 
+// TestIterEmptyValue checks that every iterator mode yields an empty value as
+// []byte{}, not nil.
+func TestIterEmptyValue(t *testing.T) {
+	if selectedNodeHashAlgorithm == EthereumNodeHashing {
+		t.Skip("empty values are not stored under the Ethereum hash scheme")
+	}
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	vals := [][]byte{{}, []byte("value"), {}}
+	_, err := db.Update(makeBatch(keys, vals))
+	r.NoError(err)
+
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		rev, err := db.LatestRevision()
+		r.NoError(err)
+		it, err := rev.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(it.Drop())
+			r.NoError(rev.Drop())
+		})
+
+		assertIteratorYields(r, cfn(it), keys, vals)
+	})
+}
+
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)

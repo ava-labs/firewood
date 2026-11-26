@@ -163,8 +163,7 @@ type ownedBytes struct {
 // existing slices will become invalid and may cause undefined behavior
 // if used after the Free call.
 func (b *ownedBytes) Free() error {
-	if b.owned.ptr == nil {
-		// Already freed (or never set), nothing to do.
+	if b.owned.len == 0 {
 		return nil
 	}
 
@@ -177,8 +176,8 @@ func (b *ownedBytes) Free() error {
 	return nil
 }
 
-// BorrowedBytes returns the underlying byte slice. It may return nil if the
-// data has already been freed was never set.
+// BorrowedBytes returns the underlying byte slice. It returns a non-nil empty
+// slice if the data is empty, has already been freed, or was never set.
 //
 // The returned slice is valid only as long as the ownedBytes is valid.
 //
@@ -191,15 +190,15 @@ func (b *ownedBytes) Free() error {
 //
 // BorrowedBytes is part of the [Borrower] interface.
 func (b *ownedBytes) BorrowedBytes() []byte {
-	if b.owned.ptr == nil {
-		return nil
+	if b.owned.len == 0 {
+		return []byte{}
 	}
 
 	return unsafe.Slice((*byte)(b.owned.ptr), b.owned.len)
 }
 
-// CopiedBytes returns a copy of the underlying byte slice. It may return nil if the
-// data has already been freed or was never set.
+// CopiedBytes returns a copy of the underlying byte slice. It returns a non-nil
+// empty slice if the data is empty, has already been freed, or was never set.
 //
 // The returned slice is a copy of the data and is valid independently of the
 // ownedBytes. It is safe to use after the ownedBytes is freed and will
@@ -207,8 +206,8 @@ func (b *ownedBytes) BorrowedBytes() []byte {
 //
 // CopiedBytes is part of the [Borrower] interface.
 func (b *ownedBytes) CopiedBytes() []byte {
-	if b.owned.ptr == nil {
-		return nil
+	if b.owned.len == 0 {
+		return []byte{}
 	}
 
 	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
@@ -217,15 +216,13 @@ func (b *ownedBytes) CopiedBytes() []byte {
 // intoError converts the ownedBytes into an error. This is used for methods
 // that return a ownedBytes as an error type.
 //
-// If the ownedBytes is nil or has already been freed, it returns nil.
-// Otherwise, the bytes will be copied into Go memory and converted into an
-// error.
+// It never returns nil, because callers reach it only on an error tag.
 //
 // The original ownedBytes will be freed after this operation and is no longer
 // valid.
 func (b *ownedBytes) intoError() error {
-	if b.owned.ptr == nil {
-		return nil
+	if b.owned.len == 0 {
+		return errors.New("firewood returned an error without a message")
 	}
 
 	err := errors.New(string(b.CopiedBytes()))
@@ -326,7 +323,7 @@ type ownedKeyValueBatch struct {
 }
 
 func (b *ownedKeyValueBatch) copy() []*ownedKeyValue {
-	if b.owned.ptr == nil {
+	if b.owned.len == 0 {
 		return nil
 	}
 	borrowed := b.borrow()
@@ -338,7 +335,7 @@ func (b *ownedKeyValueBatch) copy() []*ownedKeyValue {
 }
 
 func (b *ownedKeyValueBatch) borrow() []C.OwnedKeyValuePair {
-	if b.owned.ptr == nil {
+	if b.owned.len == 0 {
 		return nil
 	}
 
@@ -346,7 +343,7 @@ func (b *ownedKeyValueBatch) borrow() []C.OwnedKeyValuePair {
 }
 
 func (b *ownedKeyValueBatch) free() error {
-	if b == nil || b.owned.ptr == nil {
+	if b == nil || b.owned.len == 0 {
 		// we want ownedKeyValueBatch to be typed-nil safe
 		return nil
 	}
