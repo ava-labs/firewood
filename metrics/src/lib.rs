@@ -19,8 +19,10 @@
 //!     pub fn register() -> Vec<firewood_metrics::HistogramMetricConfig> { vec![] }
 //! }
 //!
+//! # fn main() {
 //! let _histogram_configs = registry::register();
 //! firewood_counter!(OP_COUNT).increment(1);
+//! # }
 //! ```
 //!
 //! # Macro overview
@@ -36,6 +38,20 @@
 //! | `firewood_gauge!(expensive: NAME).set(v as f64)` | Set only if expensive metrics enabled |
 //!
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
+//!
+//! # Handle caching
+//!
+//! Each macro call site keeps, per thread, the handles it has registered, keyed by the
+//! thread's `db_tag`, the call-site label values, and the active recorder, and updates the
+//! cached handle in place. This requires:
+//!
+//! - Label keys are string literals and label values are `&'static str`.
+//! - The recorder never evicts idle metrics (for example, the Prometheus exporter's
+//!   `idle_timeout`). A cached handle keeps updating a series the recorder has evicted, so
+//!   the series never reappears.
+//! - Local recorders are installed with [`with_local_recorder`], which tells the caches that
+//!   the recorder changed. A recorder installed through `metrics` directly can receive
+//!   handles issued by an earlier recorder at the same address.
 
 mod cache;
 mod proxy;
@@ -610,16 +626,49 @@ macro_rules! define_metrics {
     };
 }
 
-/// Returns a counter handle for advanced operations.
+/// Expands to a cached metric proxy for one call site; used by [`firewood_counter!`],
+/// [`firewood_gauge!`], and [`firewood_histogram!`].
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __firewood_metric {
+    ($proxy:ident, $handle:ident, $gate:ident, $name:expr $(, $k:literal => $v:expr)*) => {{
+        const N: usize = <[&str]>::len(&[$($k),*]);
+        ::std::thread_local! {
+            static CACHE: $crate::__private::HandleCache<$crate::__private::metrics::$handle, N> =
+                const { $crate::__private::HandleCache::new() };
+        }
+        static METADATA: $crate::__private::metrics::Metadata<'static> =
+            $crate::__private::metrics::Metadata::new(
+                ::std::module_path!(),
+                $crate::__private::metrics::Level::INFO,
+                ::std::option::Option::Some(::std::module_path!()),
+            );
+        static KEYS: [&str; N] = [$($k),*];
+        $crate::__private::$proxy::<N>::new(
+            &CACHE,
+            &METADATA,
+            $name,
+            &KEYS,
+            [$($v),*],
+            $crate::__private::Gate::$gate,
+        )
+    }};
+}
+
+/// Returns a counter at this call site.
 ///
 /// Use for values that only ever increase: commit counts, error counts, byte
-/// totals. For float-valued measurements use [`CounterExt::increment_f64`]. Metric names should end in `_total` (e.g. `proposals_created_total`,
-/// `bytes_written_total`). For values that can go up or down use
-/// [`firewood_gauge!`] instead.
+/// totals. For float-valued measurements use [`CounterExt::increment_f64`]. Metric names
+/// should end in `_total` (e.g. `proposals_created_total`, `bytes_written_total`). For values
+/// that can go up or down use [`firewood_gauge!`] instead.
 ///
 /// The metric name is resolved as `crate::registry::NAME` in the calling crate,
 /// so pass a bare identifier — not a path. See [`firewood_histogram!`] for an
 /// explanation of why `crate::registry` is used rather than `$crate::registry`.
+///
+/// Labels follow the name as `"key" => value` pairs, where `value` is a `&'static str`. The
+/// returned value supports `increment` and `absolute`; call one immediately. See the crate
+/// docs on handle caching for what the cache requires of the recorder.
 ///
 /// # Usage
 /// ```no_run
@@ -630,9 +679,11 @@ macro_rules! define_metrics {
 ///     pub const SLOW_PATH_TOTAL: &str = "slow_path_total";
 /// }
 ///
+/// # fn main() {
 /// firewood_counter!(PROPOSALS_CREATED_TOTAL).increment(1);
 /// firewood_counter!(PROPOSALS_CREATED_TOTAL, "status" => "ok").increment(1);
 /// firewood_counter!(expensive: SLOW_PATH_TOTAL).increment(1);
+/// # }
 /// ```
 // `crate` in the expansion refers to the invocation crate, not `firewood_metrics` — see
 // the `firewood_histogram!` doc for the full explanation of why this is intentional.
@@ -643,41 +694,19 @@ macro_rules! define_metrics {
 )]
 #[macro_export]
 macro_rules! firewood_counter {
-    (expensive: $name:ident) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::counter!(crate::registry::$name, "db_tag" => db_tag)
-        } else {
-            $crate::__private::metrics::Counter::noop()
-        }
-    };
-    (expensive: $name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::counter!(
-                crate::registry::$name,
-                "db_tag" => db_tag,
-                $($labels)+
-            )
-        } else {
-            $crate::__private::metrics::Counter::noop()
-        }
-    };
-    ($name:ident) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::counter!(crate::registry::$name, "db_tag" => db_tag)
-    }};
-    ($name:ident, $($labels:tt)+) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::counter!(
-            crate::registry::$name,
-            "db_tag" => db_tag,
-            $($labels)+
+    (expensive: $name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedCounter, Counter, Expensive, crate::registry::$name $(, $k => $v)*
         )
-    }};
+    };
+    ($name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedCounter, Counter, Always, crate::registry::$name $(, $k => $v)*
+        )
+    };
 }
 
-/// Returns a gauge handle for advanced operations.
+/// Returns a gauge at this call site.
 ///
 /// Use for values that can go up or down: active revision counts, queue
 /// depths, cache sizes. Metric names should include the unit where applicable
@@ -689,6 +718,11 @@ macro_rules! firewood_counter {
 /// so pass a bare identifier — not a path. See [`firewood_histogram!`] for an
 /// explanation of why `crate::registry` is used rather than `$crate::registry`.
 ///
+/// Labels follow the name as `"key" => value` pairs, where `value` is a `&'static str`. The
+/// returned value supports `set`, `increment`, `decrement`, and [`GaugeExt::set_integer`];
+/// call one immediately. See the crate docs on handle caching for what the cache requires of
+/// the recorder.
+///
 /// # Usage
 /// ```no_run
 /// # use firewood_metrics::firewood_gauge;
@@ -699,14 +733,16 @@ macro_rules! firewood_counter {
 ///     pub const PENDING_PROPOSALS: &str = "pending_proposals";
 /// }
 ///
+/// # fn main() {
 /// let count = 3_u64;
 /// let size = 1024_u64;
 /// firewood_gauge!(ACTIVE_REVISIONS).set(count as f64);
 /// firewood_gauge!(NODE_CACHE_BYTES, "tier" => "l1").set(size as f64);
 /// firewood_gauge!(expensive: PENDING_PROPOSALS).set(count as f64);
-/// // Gauge handles also support increment/decrement:
+/// // Gauges also support increment/decrement:
 /// firewood_gauge!(ACTIVE_REVISIONS).increment(1.0);
 /// firewood_gauge!(ACTIVE_REVISIONS).decrement(1.0);
+/// # }
 /// ```
 // `crate` in the expansion refers to the invocation crate — intentional; see `firewood_histogram!`.
 #[expect(
@@ -716,45 +752,28 @@ macro_rules! firewood_counter {
 )]
 #[macro_export]
 macro_rules! firewood_gauge {
-    (expensive: $name:ident) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::gauge!(crate::registry::$name, "db_tag" => db_tag)
-        } else {
-            $crate::__private::metrics::Gauge::noop()
-        }
-    };
-    (expensive: $name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::gauge!(
-                crate::registry::$name,
-                "db_tag" => db_tag,
-                $($labels)+
-            )
-        } else {
-            $crate::__private::metrics::Gauge::noop()
-        }
-    };
-    ($name:ident) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::gauge!(crate::registry::$name, "db_tag" => db_tag)
-    }};
-    ($name:ident, $($labels:tt)+) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::gauge!(
-            crate::registry::$name,
-            "db_tag" => db_tag,
-            $($labels)+
+    (expensive: $name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedGauge, Gauge, Expensive, crate::registry::$name $(, $k => $v)*
         )
-    }};
+    };
+    ($name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedGauge, Gauge, Always, crate::registry::$name $(, $k => $v)*
+        )
+    };
 }
 
-/// Returns a histogram handle for recording a single observation.
+/// Returns a histogram at this call site, for recording observations.
 ///
 /// Unlike counters and gauges, histograms always check the expensive metrics
 /// flag unless the `cheap:` prefix is used, since histogram recording typically
 /// involves more overhead (e.g. timing an operation, computing bucket counts).
+///
+/// Labels follow the name as `"key" => value` pairs, where `value` is a `&'static str`. The
+/// returned value supports `record`, `record_many`, and [`HistogramExt::record_integer`];
+/// call one immediately. See the crate docs on handle caching for what the cache requires of
+/// the recorder.
 ///
 /// ## Why `crate::registry` and not `$crate::registry`
 ///
@@ -778,11 +797,13 @@ macro_rules! firewood_gauge {
 ///     pub const GATHER_DURATION_SECONDS: &str = "gather_duration_seconds";
 /// }
 ///
+/// # fn main() {
 /// // Records only when expensive metrics are enabled:
 /// firewood_histogram!(OP_DURATION_SECONDS).record(1.23);
 ///
 /// // Always records (e.g. for low-overhead infrastructure metrics):
 /// firewood_histogram!(cheap: GATHER_DURATION_SECONDS).record(0.01);
+/// # }
 /// ```
 // `crate` in the expansion refers to the invocation crate — intentional; see the doc above.
 #[expect(
@@ -793,38 +814,16 @@ macro_rules! firewood_gauge {
 )]
 #[macro_export]
 macro_rules! firewood_histogram {
-    ($name:ident) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::histogram!(crate::registry::$name, "db_tag" => db_tag)
-        } else {
-            $crate::__private::metrics::Histogram::noop()
-        }
-    };
-    ($name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            let db_tag = $crate::current_db_tag_label();
-            $crate::__private::metrics::histogram!(
-                crate::registry::$name,
-                "db_tag" => db_tag,
-                $($labels)+
-            )
-        } else {
-            $crate::__private::metrics::Histogram::noop()
-        }
-    };
-    (cheap: $name:ident) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::histogram!(crate::registry::$name, "db_tag" => db_tag)
-    }};
-    (cheap: $name:ident, $($labels:tt)+) => {{
-        let db_tag = $crate::current_db_tag_label();
-        $crate::__private::metrics::histogram!(
-            crate::registry::$name,
-            "db_tag" => db_tag,
-            $($labels)+
+    (cheap: $name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedHistogram, Histogram, Always, crate::registry::$name $(, $k => $v)*
         )
-    }};
+    };
+    ($name:ident $(, $k:literal => $v:expr)* $(,)?) => {
+        $crate::__firewood_metric!(
+            CachedHistogram, Histogram, Expensive, crate::registry::$name $(, $k => $v)*
+        )
+    };
 }
 
 #[doc(hidden)]
@@ -834,6 +833,7 @@ pub mod __private {
     pub use ::metrics;
 
     pub use crate::cache::HandleCache;
+    pub use crate::cache::MAX_ENTRIES;
     pub use crate::proxy::CachedCounter;
     pub use crate::proxy::CachedGauge;
     pub use crate::proxy::CachedHistogram;
@@ -1108,4 +1108,12 @@ mod tests {
             assert_eq!(current_db_tag_label().as_ref(), "untagged");
         });
     }
+}
+
+/// Metric names for the macro tests; the macros resolve `crate::registry::NAME`.
+#[cfg(test)]
+mod registry {
+    pub const MACRO_OPS: &str = "macro_ops_total";
+    pub const MACRO_COSTLY: &str = "macro_costly_total";
+    pub const MACRO_DURATION: &str = "macro_duration_seconds";
 }

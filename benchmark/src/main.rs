@@ -321,10 +321,8 @@ fn spawn_prometheus_listener(
 ) -> Result<metrics_exporter_prometheus::PrometheusHandle, Box<dyn Error>> {
     use std::net::Ipv6Addr;
     use std::net::SocketAddr;
-    use std::time::Duration;
 
     use metrics_exporter_prometheus::PrometheusBuilder;
-    use metrics_util::MetricKindMask;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -336,10 +334,6 @@ fn spawn_prometheus_listener(
         let _guard = rt.enter();
         PrometheusBuilder::new()
             .with_http_listener(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port))
-            .idle_timeout(
-                MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
-                Some(Duration::from_secs(10)),
-            )
             .build()?
     };
 

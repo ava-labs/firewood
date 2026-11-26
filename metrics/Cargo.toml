@@ -14,7 +14,13 @@ metrics.workspace = true
 log = { workspace = true, optional = true, features = ["kv"] }
 
 [dev-dependencies]
+criterion.workspace = true
+metrics-collector-prometheus.workspace = true
 metrics-util.workspace = true
+
+[[bench]]
+name = "handle_cache"
+harness = false
 
 [features]
 logger = ["dep:log"]

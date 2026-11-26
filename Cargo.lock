@@ -1839,7 +1839,6 @@ dependencies = [
  "log",
  "metrics",
  "metrics-exporter-prometheus",
- "metrics-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-proto",
@@ -1925,8 +1924,10 @@ dependencies = [
 name = "firewood-metrics"
 version = "0.8.0"
 dependencies = [
+ "criterion",
  "log",
  "metrics",
+ "metrics-collector-prometheus",
  "metrics-util",
 ]
 

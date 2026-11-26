@@ -282,6 +282,7 @@ mod tests {
     use crate::MetricsContextGuard;
     use crate::cache::MAX_ENTRIES;
     use crate::current_db_tag_label;
+    use crate::registry;
     use crate::set_metrics_context;
     use crate::with_local_recorder;
 
@@ -446,6 +447,44 @@ mod tests {
         assert_eq!(gauge("g_int"), Some(&DebugValue::Gauge(7.0.into())));
         let expected = [1.5, 2.5, 2.5, 3.0].map(Into::into).to_vec();
         assert_eq!(histogram, Some(&DebugValue::Histogram(expected)));
+    }
+
+    /// The macros record under the thread's `db_tag` first, then the call-site labels, for
+    /// literal and runtime label values, and honor the expensive gate and `cheap:`.
+    #[test]
+    fn macros_record_with_db_tag_and_labels() {
+        let runtime = if std::hint::black_box(true) {
+            "hit"
+        } else {
+            "miss"
+        };
+        let recorded = Recorded::during(|| {
+            let _guard = tagged("db-m");
+            crate::firewood_counter!(MACRO_OPS, "type" => "literal").increment(1);
+            crate::firewood_counter!(MACRO_OPS, "type" => runtime).increment(2);
+            crate::firewood_counter!(expensive: MACRO_COSTLY).increment(1);
+            crate::firewood_histogram!(MACRO_DURATION).record(1.0);
+            crate::firewood_histogram!(cheap: MACRO_DURATION).record(2.0);
+        });
+        let tag = ("db_tag", "db-m");
+        assert_eq!(
+            recorded.counter(registry::MACRO_OPS, &[tag, ("type", "literal")]),
+            1
+        );
+        assert_eq!(
+            recorded.counter(registry::MACRO_OPS, &[tag, ("type", "hit")]),
+            2
+        );
+        assert_eq!(
+            recorded.counter(registry::MACRO_COSTLY, &[tag]),
+            0,
+            "expensive recorded"
+        );
+        assert_eq!(
+            recorded.get(MetricKind::Histogram, registry::MACRO_DURATION, &[tag]),
+            Some(&DebugValue::Histogram(vec![2.0.into()])),
+            "only the cheap histogram should record with expensive metrics off"
+        );
     }
 
     /// Updating a metric and reading the context from a thread-local destructor, after the
