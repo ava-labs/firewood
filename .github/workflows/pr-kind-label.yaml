@@ -1,15 +1,14 @@
 name: Label pull requests by kind
 
-on:
+on: # zizmor: ignore[dangerous-triggers] labels from the PR title; no checkout
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
-permissions:
-  contents: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   kind:
+    permissions: {}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7

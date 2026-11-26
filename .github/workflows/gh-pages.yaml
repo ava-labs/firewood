@@ -1,6 +1,6 @@
 name: gh-pages
 
-on:
+on: # zizmor: ignore[dangerous-triggers] jobs require the triggering run to come from this repository
   push:
     branches:
       - main
@@ -34,14 +34,18 @@ env:
   # "Toolchain Selection".
   RUSTUP_TOOLCHAIN: stable
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: read
     # Only run on the canonical repo — forks don't have GitHub Pages
     # configured and the deploy step fails.
     # Also skip if triggered by failed workflow_run.
-    if: |
-      github.repository == 'ava-labs/firewood' &&
-      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    if: >-
+      (github.repository == 'ava-labs/firewood' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')) &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
       has_bench: ${{ steps.bench.outputs.has_bench }}
@@ -140,7 +144,9 @@ jobs:
   deploy:
     # Pull requests only validates the build step but does not actually deploy.
     # Forks don't have Pages configured, so restrict to the canonical repo.
-    if: github.repository == 'ava-labs/firewood' && github.event_name != 'pull_request'
+    if: >-
+      (github.repository == 'ava-labs/firewood' && github.event_name != 'pull_request') &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
     needs: build
     permissions:
       pages: write
@@ -166,10 +172,13 @@ jobs:
         uses: actions/deploy-pages@v5
 
   smoke:
+    permissions: {}
     # Same gate as deploy: canonical repo, non-PR events. Runs only after a
     # successful deploy, validating the link-outs that linkcheck (web links off)
     # cannot — e.g. a stale crate directory after a rustdoc relocation.
-    if: github.repository == 'ava-labs/firewood' && github.event_name != 'pull_request'
+    if: >-
+      (github.repository == 'ava-labs/firewood' && github.event_name != 'pull_request') &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
     needs: [build, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -182,10 +191,12 @@ jobs:
             echo "checking ${url}"
             curl --fail --silent --show-error --location --max-time 30 --connect-timeout 10 "${url}" > /dev/null
           done
-          if [ "${{ needs.build.outputs.has_bench }}" = "true" ]; then
+          if [ "${NEEDS_BUILD_OUTPUTS_HAS_BENCH}" = "true" ]; then
             url="${base}/bench/"
             echo "checking ${url}"
             curl --fail --silent --show-error --location --max-time 30 --connect-timeout 10 "${url}" > /dev/null
           else
             echo "skipping /bench/ — no benchmark history on this deploy"
           fi
+        env:
+          NEEDS_BUILD_OUTPUTS_HAS_BENCH: ${{ needs.build.outputs.has_bench }}

@@ -5,11 +5,17 @@ on:
   push:
     branches: [main]
 
+permissions: {}
+
 jobs:
   verify-go-versions:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install jq
         run: |
@@ -32,18 +38,21 @@ jobs:
 
       - name: Check Go versions match
         run: |
-          if [ "${{ steps.go_versions.outputs.GO_VERSION_FFI }}" != "${{ steps.go_versions.outputs.GO_VERSION_COMPAT_TESTS }}" ]; then
+          if [ "${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI}" != "${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_COMPAT_TESTS}" ]; then
             echo "Go versions do not match:"
-            echo "ffi/go.mod: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
-            echo "ffi/tests/go.mod: ${{ steps.go_versions.outputs.GO_VERSION_COMPAT_TESTS }}"
+            echo "ffi/go.mod: ${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI}"
+            echo "ffi/tests/go.mod: ${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_COMPAT_TESTS}"
             exit 1
           fi
-          echo "All Go versions match: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
+          echo "All Go versions match: ${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI}"
+        env:
+          STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}
+          STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_COMPAT_TESTS: ${{ steps.go_versions.outputs.GO_VERSION_COMPAT_TESTS }}
 
       - name: Check provisioning manifest matches go.mod
         run: |
           . ./infra/toolchain-versions.sh
-          EXPECTED="${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
+          EXPECTED="${STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI}"
           if [ "$FIREWOOD_GO_VERSION" != "$EXPECTED" ]; then
             echo "Provisioned hosts would run a different Go than CI tests with:"
             echo "infra/toolchain-versions.sh: $FIREWOOD_GO_VERSION"
@@ -53,3 +62,5 @@ jobs:
             exit 1
           fi
           echo "Toolchain manifest matches ffi/go.mod: $FIREWOOD_GO_VERSION"
+        env:
+          STEPS_GO_VERSIONS_OUTPUTS_GO_VERSION_FFI: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}
