@@ -15,6 +15,7 @@
 - [Design Documents](designs/README.md)
   - [Firewood mdBook Documentation Site](designs/2026-06-17-mdbook-documentation-site.md)
   - [On-disk format and addressing](designs/2024-08-13-on-disk-format-and-addressing.md)
+  - [Development container](designs/2026-06-22-devcontainer.md)
   - [Template](designs/template.md)
 
 # Integration
