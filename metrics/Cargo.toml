@@ -13,6 +13,9 @@ description = "Shared metrics utilities for Firewood."
 metrics.workspace = true
 log = { workspace = true, optional = true, features = ["kv"] }
 
+[dev-dependencies]
+metrics-util.workspace = true
+
 [features]
 logger = ["dep:log"]
 

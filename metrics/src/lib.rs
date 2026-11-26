@@ -37,8 +37,12 @@
 //!
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
+mod cache;
+mod proxy;
+
 use std::cell::RefCell;
 
+pub use cache::with_local_recorder;
 use metrics::SharedString;
 
 /// Sealed helper for [`GaugeExt`]: integer types that can be stored in a gauge as `f64`.
@@ -222,6 +226,9 @@ thread_local! {
 /// `untaggedDBTag` in `ffi/memory.go`; change both together.
 const DEFAULT_DB_TAG: SharedString = SharedString::const_str("untagged");
 
+/// [`DEFAULT_DB_TAG`] at one address, so cached handles can match it by address.
+static UNTAGGED: SharedString = DEFAULT_DB_TAG;
+
 /// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
 pub struct MetricsContextGuard {
@@ -230,7 +237,8 @@ pub struct MetricsContextGuard {
 
 impl Drop for MetricsContextGuard {
     fn drop(&mut self) {
-        METRICS_CONTEXT.with(|context| {
+        // The context is gone during thread teardown; there is nothing to restore.
+        let _ = METRICS_CONTEXT.try_with(|context| {
             context.replace(self.previous.take());
         });
     }
@@ -239,25 +247,59 @@ impl Drop for MetricsContextGuard {
 /// Sets the thread-local metrics context for the duration of the returned guard.
 #[must_use]
 pub fn set_metrics_context(context: Option<MetricsContext>) -> MetricsContextGuard {
-    let previous = METRICS_CONTEXT.with(|current| current.replace(context));
+    let previous = METRICS_CONTEXT
+        .try_with(|current| current.replace(context))
+        .ok()
+        .flatten();
     MetricsContextGuard { previous }
+}
+
+/// Runs `f` on the thread's context, or returns `None` when it cannot be read: during
+/// thread teardown, or while the context is borrowed mutably.
+fn read_context<R>(f: impl FnOnce(Option<&MetricsContext>) -> R) -> Option<R> {
+    METRICS_CONTEXT
+        .try_with(|current| current.try_borrow().ok().map(|context| f(context.as_ref())))
+        .ok()
+        .flatten()
+}
+
+/// Calls `f` with the thread's `db_tag` (or `"untagged"`) and whether expensive metrics are
+/// enabled, borrowing the tag for the duration of `f` instead of cloning it. When the context
+/// cannot be read, `f` gets `"untagged"` and `false`.
+pub(crate) fn with_context<R>(f: impl FnOnce(&SharedString, bool) -> R) -> R {
+    let mut f = Some(f);
+    let from_context = read_context(|context| {
+        f.take().map(|f| {
+            f(
+                context
+                    .and_then(|context| context.db_tag.as_ref())
+                    .unwrap_or(&UNTAGGED),
+                context.is_some_and(MetricsContext::expensive_metrics_enabled),
+            )
+        })
+    })
+    .flatten();
+    match (from_context, f) {
+        (Some(result), _) => result,
+        (None, Some(f)) => f(&UNTAGGED, false),
+        (None, None) => unreachable!("`f` returns a value whenever it is called"),
+    }
 }
 
 /// Returns the current thread-local metrics context, if one is set.
 #[must_use]
 pub fn current_metrics_context() -> Option<MetricsContext> {
-    METRICS_CONTEXT.with(|current| current.borrow().clone())
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "`Option::cloned` does not satisfy the closure's higher-ranked lifetime"
+    )]
+    read_context(|context| context.cloned()).flatten()
 }
 
 /// Returns the current metrics db tag, if one is set for this thread.
 #[must_use]
 pub fn current_db_tag() -> Option<SharedString> {
-    METRICS_CONTEXT.with(|current| {
-        current
-            .borrow()
-            .as_ref()
-            .and_then(|context| context.db_tag.clone())
-    })
+    read_context(|context| context.and_then(|context| context.db_tag.clone())).flatten()
 }
 
 /// Returns the current metrics db tag, or a default "untagged" label.
@@ -271,12 +313,8 @@ pub fn current_db_tag_label() -> SharedString {
 /// If no context is set, this returns `false`.
 #[must_use]
 pub fn expensive_metrics_enabled() -> bool {
-    METRICS_CONTEXT.with(|current| {
-        current
-            .borrow()
-            .as_ref()
-            .is_some_and(|context| context.expensive_metrics_enabled)
-    })
+    read_context(|context| context.is_some_and(|context| context.expensive_metrics_enabled))
+        .unwrap_or(false)
 }
 
 /// Defines metric name constants and a `register()` function from a single schema.
@@ -794,6 +832,12 @@ pub mod __private {
     #[cfg(feature = "logger")]
     pub use ::log;
     pub use ::metrics;
+
+    pub use crate::cache::HandleCache;
+    pub use crate::proxy::CachedCounter;
+    pub use crate::proxy::CachedGauge;
+    pub use crate::proxy::CachedHistogram;
+    pub use crate::proxy::Gate;
 }
 
 /// Logs a message with a `db_tag` key-value sourced from the thread-local
