@@ -68,7 +68,6 @@ firewood-replay = { path = "replay", version = "0.8.0" }
 firewood-triehash = { path = "triehash" }
 
 # common dependencies
-aquamarine = "0.6.0"
 bytemuck = { version = "1.25.2", features = ["const_zeroed"] }
 bytemuck_derive = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }

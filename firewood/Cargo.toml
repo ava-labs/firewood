@@ -24,7 +24,6 @@ rust-version.workspace = true
 
 [dependencies]
 # Workspace dependencies
-aquamarine.workspace = true
 bytemuck_derive.workspace = true
 bytemuck.workspace = true
 fastrace.workspace = true

@@ -65,18 +65,8 @@ use std::io::ErrorKind;
 /// - `ImmutableProposal`: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
 /// - `Reconstructed`: A reconstructed view that supports read operations and linear reconstruction.
 ///
-/// The general lifecycle of nodestores is as follows:
-/// ```mermaid
-/// flowchart TD
-/// subgraph subgraph["Committed Revisions"]
-/// L("Latest Nodestore&lt;Committed, S&gt;") --- |...|O("Oldest NodeStore&lt;Committed, S&gt;")
-/// end
-/// O --> E("Expire")
-/// L --> |start propose|M("NodeStore&lt;Mutable&lt;Propose&gt;, S&gt;")
-/// M --> |finish propose + hash|I("NodeStore&lt;ProposedImmutable, S&gt;")
-/// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
-/// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
-/// ```
+/// See [NodeStore Lifecycle](https://ava-labs.github.io/firewood/concepts/nodestore-lifecycle.html)
+/// in the Firewood book for a diagram of how these states convert into each other.
 use std::marker::PhantomData;
 use std::mem::take;
 use std::num::NonZeroU64;
@@ -832,43 +822,8 @@ impl ImmutableProposal {
 /// The first generic parameter `T` is the state type (see module docs for the full list).
 /// The second generic parameter `S` is the storage backend (in-memory or on-disk).
 ///
-/// The general lifecycle of nodestores is as follows.
-/// Red arrows consume their source; blue arrows borrow it.
-#[cfg_attr(doc, aquamarine::aquamarine)]
-/// ```mermaid
-/// flowchart TD
-///
-/// subgraph committed["Committed Revisions"]
-///   L("Latest Committed")
-///   O("Oldest Committed")
-/// end
-///
-/// O -->|"PersistWorker::reap"| E(("Expired"))
-///
-/// L -->|"Db::propose"| MP("Mutable< Propose >")
-/// MP --> IP("Arc< ImmutableProposal >")
-/// IP -->|"Proposal::commit"| C2("New Committed")
-/// IP -->|"Proposal::propose"| MP
-///
-/// committed -->|"reconstruct"| MR("Mutable< Recon >")
-/// R -->|"reconstruct"| MR
-/// MR --> R("Reconstructed")
-///
-/// linkStyle 0 stroke:red
-/// linkStyle 1 stroke:blue
-/// linkStyle 2 stroke:red
-/// linkStyle 3 stroke:red
-/// linkStyle 4 stroke:blue
-/// linkStyle 5 stroke:blue
-/// linkStyle 6 stroke:red
-/// linkStyle 7 stroke:red
-///
-/// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
-/// style MP fill:#E8F5E9
-/// style IP fill:#E8F5E9
-/// style MR fill:#E3F2FD
-/// style R fill:#E3F2FD
-/// ```
+/// See [NodeStore Lifecycle](https://ava-labs.github.io/firewood/concepts/nodestore-lifecycle.html)
+/// in the Firewood book for a diagram of the lifecycle.
 ///
 /// # Proposal lifecycle
 ///

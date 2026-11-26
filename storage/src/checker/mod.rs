@@ -778,15 +778,13 @@ mod test {
     }
 
     /// Generate a test trie with the following structure:
-    #[cfg_attr(doc, aquamarine::aquamarine)]
-    /// ```mermaid
-    /// graph TD
-    ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
-    ///     Branch["Branch Node<br/>partial_path: [3]<br/>path: 0x203<br/>children: [1] -> Leaf"]
-    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x2031454545...45 (32 bytes)<br/>value: [6, 7, 8]"]
     ///
-    ///     Root -->|"nibble 0"| Branch
-    ///     Branch -->|"nibble 1"| Leaf
+    /// ```text
+    /// Root    partial_path [2]
+    ///  │ nibble 0
+    /// Branch  partial_path [3], path 0x203
+    ///  │ nibble 1
+    /// Leaf    partial_path [4, 5] x 30, value [6, 7, 8]
     /// ```
     #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie<H: HashMode>(nodestore: &NodeStore<Committed, MemStore, H>) -> TestTrie {

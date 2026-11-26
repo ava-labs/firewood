@@ -80,46 +80,8 @@ pub enum PersistError {
 
 /// Handle for managing the background persistence thread.
 ///
-/// # Sequence diagram
-///
-/// Below is an example when `max_persistence_gap` is set to 10:
-#[cfg_attr(doc, aquamarine::aquamarine)]
-/// ```mermaid
-/// sequenceDiagram
-///     participant Caller
-///     participant Main as Main Thread
-///     participant BG as Background Thread
-///     participant Disk
-///
-///     Note over Main: permits = 10
-///
-///     loop Commits 1-4
-///         Caller->>Main: commit()
-///         Main->>Main: store latest revision, permits -= 1
-///         Note right of BG: Sleeping (permits > threshold)
-///     end
-///
-///     Note over Main: permits = 6
-///
-///     Caller->>Main: commit() (5th)
-///     Main->>Main: store latest revision, permits -= 1
-///     Note over Main: permits = 5 = threshold
-///     Main->>BG: notify persist_ready
-///     BG->>Disk: persist latest revision
-///     BG->>BG: release 5 permits
-///     Note over Main: permits = 10
-///
-///     loop Commits 6-8
-///         Caller->>Main: commit()
-///         Main->>Main: store latest revision, permits -= 1
-///         Note right of BG: Sleeping (permits > threshold)
-///     end
-///
-///     Caller->>Main: close()
-///     Main->>BG: shutdown signal
-///     BG->>Disk: persist last committed revision
-///     Note right of Disk: Latest committed revision is persisted
-/// ```
+/// See [Background Persistence](https://ava-labs.github.io/firewood/concepts/background-persistence.html)
+/// in the Firewood book for a sequence diagram of commits and persistence.
 #[derive(Debug)]
 pub(crate) struct PersistWorker<H> {
     /// The background thread responsible for persisting commits async.
