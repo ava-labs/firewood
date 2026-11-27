@@ -48,7 +48,8 @@ The Bazel checks require [Bazelisk](https://github.com/bazelbuild/bazelisk#insta
 or [Nix](https://nixos.org/download/). The recipes use `scripts/run-bazel.sh`,
 which runs Bazelisk directly or through Nix to select the repository's pinned
 Bazel version. See [Bazel Source Builds](ffi/README.md#bazel-source-builds) for
-FFI integration and dependency-update instructions.
+FFI integration and dependency-update instructions, and
+[Bazel CI setup](.github/actions/setup-bazel/README.md) for cache maintenance.
 
 Use the recipes rather than bare Cargo for anything that builds or runs code.
 `rust-toolchain.toml` pins a nightly for `cargo fmt`, clippy, and miri, so a

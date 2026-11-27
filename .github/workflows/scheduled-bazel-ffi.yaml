@@ -1,0 +1,18 @@
+name: bazel-ffi-scheduled
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  # Compile from cached inputs without reusing remote action or test results.
+  bazel-ffi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: $/.github/actions/setup-bazel
+      - name: Check Cargo and Bazel Rust toolchains
+        run: ./scripts/run-just.sh ci-check-bazel-toolchain
+      - name: Build and test Bazel FFI without remote caching
+        run: ./scripts/run-just.sh ci-bazel-ffi

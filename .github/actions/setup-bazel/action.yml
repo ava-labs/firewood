@@ -1,0 +1,78 @@
+name: Set up Bazel
+description: >-
+  Check out the repository, install just and Bazelisk, restore Bazel input
+  caches, and configure local and remote Bazel caches.
+
+# Reference this action as `$/.github/actions/setup-bazel`. The `$/` form
+# resolves at the running commit without a prior checkout, which lets this
+# action perform the checkout itself.
+
+inputs:
+  remote-cache-url:
+    description: The remote cache URL. Leave empty to disable the remote cache.
+    default: ""
+  remote-cache-auth-header:
+    description: The authorization header for the remote cache.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+    - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      with:
+        tool: just@1.46.0
+    - name: Configure Bazel input-cache paths
+      id: cache-paths
+      shell: bash
+      run: |
+        repository_cache="$HOME/.cache/bazel-repository-cache"
+        go_mod_cache="$HOME/.cache/bazel-go-repository-modcache"
+        bazelisk_home="$HOME/.cache/bazelisk/$(<.bazelversion)"
+        mkdir -p "$repository_cache" "$go_mod_cache" "$bazelisk_home"
+        {
+          echo "repository-cache=$repository_cache"
+          echo "go-mod-cache=$go_mod_cache"
+        } >> "$GITHUB_OUTPUT"
+        echo "BAZELISK_HOME=$bazelisk_home" >> "$GITHUB_ENV"
+    - name: Restore Bazel input cache
+      id: cache
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ${{ steps.cache-paths.outputs.repository-cache }}
+          ${{ steps.cache-paths.outputs.go-mod-cache }}
+          ~/.cache/bazelisk
+        key: bazel-inputs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'MODULE.bazel.lock', 'Cargo.lock', '**/Cargo.toml', 'ffi/BUILD.bazel', 'ffi/go.mod', 'ffi/go.sum', '.github/actions/setup-bazel/cache-ci-dependencies.sh', '.github/actions/setup-bazel/action.yml', '.github/actions/setup-bazel/configure-bazelrc.sh') }}
+        restore-keys: |
+          bazel-inputs-${{ runner.os }}-${{ runner.arch }}-
+    - name: Configure Bazel caches
+      shell: bash
+      env:
+        REPOSITORY_CACHE_DIR: ${{ steps.cache-paths.outputs.repository-cache }}
+        GO_MOD_CACHE_DIR: ${{ steps.cache-paths.outputs.go-mod-cache }}
+        BAZEL_REMOTE_CACHE_URL: ${{ inputs.remote-cache-url }}
+        BAZEL_REMOTE_CACHE_AUTH_HEADER: ${{ inputs.remote-cache-auth-header }}
+      run: ${{ github.action_path }}/configure-bazelrc.sh
+    - uses: bazel-contrib/setup-bazel@0.15.0
+    - name: Fetch Bazel inputs
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: ${{ github.action_path }}/cache-ci-dependencies.sh
+    - name: Disable Bazel dependency downloads
+      shell: bash
+      run: |
+        echo 'common --repository_disable_download' >> "$HOME/.bazelrc"
+        echo 'common --repo_env=GOPROXY=off' >> "$HOME/.bazelrc"
+    - name: Check Bazel metadata
+      shell: bash
+      run: ./scripts/run-just.sh ci-check-bazel-metadata
+    - name: Save Bazel input cache
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ${{ steps.cache-paths.outputs.repository-cache }}
+          ${{ steps.cache-paths.outputs.go-mod-cache }}
+          ~/.cache/bazelisk
+        key: ${{ steps.cache.outputs.cache-primary-key }}

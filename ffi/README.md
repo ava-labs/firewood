@@ -25,7 +25,7 @@ import (
     "context"
     "time"
 
-    "github.com/ava-labs/firewood/ffi"
+    "github.com/ava-labs/firewood-go/ffi"
 )
 
 // Open a database using MerkleDB-compatible hashing.
@@ -107,9 +107,9 @@ To trigger this build, [attach-static-libs](../.github/workflows/attach-static-l
 
 ### Bazel Source Builds
 
-Use Bazel targets when a consumer must build Firewood from source. This flow does
-not change ordinary Go builds. They continue to use the published FFI module and
-its pre-built static libraries.
+Use Bazel targets when a consumer must build Firewood from source. This flow does not
+change ordinary Go builds. They continue to use the published FFI module and its
+pre-built static libraries.
 
 [`ffi/BUILD.bazel`](BUILD.bazel) exports `//ffi:ffi`, with import path
 `github.com/ava-labs/firewood-go/ffi`.
@@ -124,18 +124,29 @@ Keep the Go import path and the `go.mod` dependency unchanged. In Bazel
 `BUILD.bazel` files, make Go targets that import the FFI depend on
 `@firewood//ffi:ffi`.
 
-After you change Cargo dependencies or Bazel module dependencies, run:
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for Bazel prerequisites.
+
+After you change Cargo, Go FFI, or Bazel dependencies, or the Rust toolchain, run
+these commands from the repository root:
 
 ```sh
-just update-bazel-metadata
-just ci-check-bazel-metadata
-just ci-check-bazel-toolchain
-just ci-bazel-ffi
+./scripts/run-just.sh update-bazel-metadata
+./scripts/run-just.sh ci-check-bazel-metadata
+./scripts/run-just.sh ci-check-bazel-toolchain
+./scripts/run-just.sh ci-bazel-ffi
 ```
 
-`update-bazel-metadata` updates `MODULE.bazel.lock`. The check commands verify
-that metadata is current, that the Cargo and Bazel Rust settings match, and that
-the FFI builds and tests pass.
+`update-bazel-metadata` regenerates Rust checksums and Bazel module metadata.
+Commit changes to `MODULE.bazel` and `MODULE.bazel.lock`. Keep the Rust version and
+edition aligned with the workspace settings in `Cargo.toml`.
+
+The checks cover metadata freshness, Cargo/Bazel toolchain alignment, and FFI
+compilation and tests. The metadata check confirms that the checksum section
+targets the configured Rust version; it does not independently verify the hashes.
+Bazel FFI tests do not replace the non-Bazel compatibility suites.
+
+For cache preparation or configuration changes, follow the
+[Bazel CI maintenance checks](../.github/actions/setup-bazel/README.md#changing-the-setup-safely).
 
 ### Hash Mode
 

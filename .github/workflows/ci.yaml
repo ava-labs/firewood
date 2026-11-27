@@ -208,13 +208,10 @@ jobs:
   bazel-ffi:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-bazel
         with:
-          tool: just@1.46.0
-      - uses: bazel-contrib/setup-bazel@0.15.0
-      - name: Check Bazel metadata
-        run: ./scripts/run-just.sh ci-check-bazel-metadata
+          remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || '' }}
+          remote-cache-auth-header: ${{ secrets.BAZEL_REMOTE_CACHE_AUTH_HEADER || '' }}
       - name: Check Cargo and Bazel Rust toolchains
         run: ./scripts/run-just.sh ci-check-bazel-toolchain
       - name: Build and test Bazel FFI

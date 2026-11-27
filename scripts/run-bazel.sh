@@ -2,10 +2,19 @@
 
 set -euo pipefail
 
+# Isolate cache validation without changing the developer's Bazel configuration.
+startup_options=()
+if [[ -n "${FIREWOOD_BAZELRC:-}" ]]; then
+    startup_options+=(--nosystem_rc --noworkspace_rc --nohome_rc "--bazelrc=$FIREWOOD_BAZELRC")
+fi
+if [[ -n "${FIREWOOD_BAZEL_OUTPUT_BASE:-}" ]]; then
+    startup_options+=("--output_base=$FIREWOOD_BAZEL_OUTPUT_BASE")
+fi
+
 if command -v bazelisk &> /dev/null; then
-    exec bazelisk "$@"
+    exec bazelisk "${startup_options[@]}" "$@"
 elif command -v nix &> /dev/null; then
-    exec nix run nixpkgs#bazelisk -- "$@"
+    exec nix run nixpkgs#bazelisk -- "${startup_options[@]}" "$@"
 else
     echo "Error: Neither bazelisk nor nix is installed." >&2
     echo "" >&2

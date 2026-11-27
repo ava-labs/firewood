@@ -63,7 +63,15 @@ ci-check-go-generate:
     fi
 
 # Regenerate Bazel module metadata after changing Bazel or Cargo dependencies.
-update-bazel-metadata:
+# Pass `check` to validate generated metadata without downloading its manifest.
+update-bazel-metadata mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{mode}}" in
+        "") ./scripts/update-bazel-rust-toolchain-shas.sh ;;
+        check) ./scripts/update-bazel-rust-toolchain-shas.sh --check ;;
+        *) echo "error: unknown Bazel metadata mode '{{mode}}'" >&2; exit 2 ;;
+    esac
     ./scripts/run-bazel.sh mod tidy
 
 # Check that regenerating Bazel module metadata leaves tracked files unchanged.
@@ -71,10 +79,10 @@ ci-check-bazel-metadata:
     #!/usr/bin/env bash
     set -euo pipefail
     before=$(git status --porcelain)
-    ./scripts/run-bazel.sh mod tidy
+    ./scripts/run-just.sh update-bazel-metadata check
     after=$(git status --porcelain)
     if [[ "$before" != "$after" ]]; then
-        echo "error: bazel mod tidy resulted in changes to tracked files. Run just update-bazel-metadata and commit the changes." >&2
+        echo "error: Bazel metadata is stale; run \`just update-bazel-metadata\`, then stage or commit the changes." >&2
         git --no-pager diff
         exit 1
     fi
@@ -82,6 +90,10 @@ ci-check-bazel-metadata:
 # Check that Cargo's Rust version and edition match Bazel's Rust toolchain.
 ci-check-bazel-toolchain:
     ./scripts/check-bazel-toolchain.sh
+
+# Check cold-cache preparation with fresh output bases and no remote cache.
+ci-check-bazel-cache:
+    ./scripts/check-bazel-cache.sh
 
 # Build and test the Bazel FFI.
 ci-bazel-ffi:
