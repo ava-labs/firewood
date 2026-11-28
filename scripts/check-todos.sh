@@ -88,6 +88,7 @@ excluded_pathspecs=(
     ':!CHANGELOG.md'                    # Historical descriptions of changes.
     ':!docs/**'                         # Documentation and design prose.
     ':!justfile'                        # Describes the CI check command.
+    ':!MODULE.bazel.lock'               # Generated dependency metadata.
 )
 
 # git grep skips target/, untracked, and gitignored files for us; -I also skips

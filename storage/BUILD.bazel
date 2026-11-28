@@ -1,0 +1,43 @@
+# gazelle:ignore
+#
+# Storage is a Rust implementation detail of the FFI. Its logger feature must
+# match the Firewood and FFI targets that depend on it.
+
+load("@firewood_crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# build.rs declares platform-specific configuration, including the Linux-only
+# io_uring alias. Compile it through rules_rust instead of duplicating that logic.
+cargo_build_script(
+    name = "storage_build_script",
+    srcs = ["build.rs"],
+    edition = "2024",
+    deps = all_crate_deps(
+        package_name = "storage",
+        build = True,
+    ),
+)
+
+rust_library(
+    name = "firewood-storage",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["logger"],
+    crate_name = "firewood_storage",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    # Procedural macros compile in a separate phase.
+    proc_macro_deps = all_crate_deps(
+        package_name = "storage",
+        proc_macro = True,
+    ),
+    # Only Firewood's Bazel targets use this implementation directly.
+    visibility = ["//:__subpackages__"],
+    # The build script supplies configuration and native-link metadata.
+    deps = [
+        ":storage_build_script",
+        "//metrics:firewood-metrics",
+    ] + all_crate_deps(package_name = "storage") + [
+        "@firewood_crates//:log",
+    ],
+)

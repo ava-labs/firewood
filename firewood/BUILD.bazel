@@ -1,0 +1,30 @@
+# gazelle:ignore
+#
+# This crate is the Rust implementation behind the FFI. Keep its logger feature
+# aligned with the FFI target so logging dependencies resolve consistently.
+
+load("@firewood_crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "firewood",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["logger"],
+    crate_name = "firewood",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    # rules_rust needs procedural macros separately from normal dependencies.
+    proc_macro_deps = [
+        "//firewood-macros",
+    ] + all_crate_deps(
+        package_name = "firewood",
+        proc_macro = True,
+    ),
+    # Only Firewood's Bazel targets use this implementation directly.
+    visibility = ["//:__subpackages__"],
+    # Workspace crates are not represented by crate_universe repositories.
+    deps = [
+        "//metrics:firewood-metrics",
+        "//storage:firewood-storage",
+    ] + all_crate_deps(package_name = "firewood"),
+)
